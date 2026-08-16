@@ -173,6 +173,38 @@ validation:
 FCPE is loaded lazily on the first validation pass. If it cannot be loaded, the
 pitch metrics are disabled with a warning and training continues.
 
+### Checking that control actually works
+
+The validation metrics compare the output against the **ground-truth** curves of
+the reference audio, which is a necessary check but not a sufficient one: a
+model that ignored the excitation and reconstructed the utterance from the
+latent alone would still score well, because the reference happens to have
+exactly that pitch.
+
+`scripts/check_source_control.py` closes that gap by re-synthesizing one
+utterance with **modified** curves and measuring whether the output followed:
+
+```bash
+uv run python scripts/check_source_control.py \
+    --checkpoint runs/base/checkpoints/last.ckpt \
+    --dataset data/processed/jsut_song \
+    --output-dir runs/base/control_check
+```
+
+```
+condition             f0 err (cent)   f0 acc  f0 corr   energy bias (dB)  energy corr
+reference                      39.6    0.965   0.9905              -0.74        0.927
+pitch_down_2st                 38.2    0.957   0.9909              -1.06        0.919
+pitch_up_3st                   31.3    0.968   0.9942              -1.72        0.907
+energy_x0.5                    38.6    0.962   0.9910              -1.16        0.881
+```
+
+The error should stay roughly flat as the curve moves: that means the output
+tracked the *new* target, not the one it was trained on. A sharp rise under
+transposition means the model is reconstructing from memory instead of being
+controlled. Expect degradation far outside the training pitch range — `+7st` on
+a corpus that never goes that high is not a fair test.
+
 ## Checkpoints
 
 `ModelCheckpoint` monitors `val/mel` and writes to `checkpoint.dirpath`, keeping
