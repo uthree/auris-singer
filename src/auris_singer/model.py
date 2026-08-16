@@ -224,6 +224,14 @@ class AurisSinger(nn.Module):
             "wav_hat": wav_hat,
             "source": source,
             "slice_ids": slice_ids,
+            # The sliced decoder inputs are returned so callers can re-run the
+            # decoder on a modified latent (see the latent-usage diagnostic in
+            # the Lightning module) without repeating the encoder pass.
+            "z_slice": z_slice,
+            "f0_slice": f0_slice,
+            "energy_slice": energy_slice,
+            "voiced_slice": voiced_slice,
+            "g": g,
             "z": z,
             "z_p": z_p,
             "m_q": m_q,

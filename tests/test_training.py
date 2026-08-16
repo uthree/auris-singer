@@ -181,3 +181,70 @@ def test_synthesize_validates_its_inputs(module):
         synthesizer.synthesize(["a", "zzz"], [2, 2], [220.0] * 4, [0.1] * 4)
     with pytest.raises(KeyError, match="unknown speaker"):
         synthesizer.resolve_speaker("nobody")
+
+
+def test_kl_warmup_ramps_from_zero_to_one(tiny_model_config, tiny_discriminator_config):
+    module = AurisSingerModule(
+        model=tiny_model_config,
+        discriminator=tiny_discriminator_config,
+        audio=AUDIO,
+        loss={**LOSS, "kl_warmup_steps": 100},
+    )
+    for step, expected in [(0, 0.0), (25, 0.25), (100, 1.0), (500, 1.0)]:
+        with mock.patch.object(
+            type(module), "global_step", new_callable=mock.PropertyMock, return_value=step
+        ):
+            assert module.kl_scale() == pytest.approx(expected)
+
+
+def test_kl_warmup_disabled_is_always_one(tiny_model_config, tiny_discriminator_config):
+    module = AurisSingerModule(
+        model=tiny_model_config,
+        discriminator=tiny_discriminator_config,
+        audio=AUDIO,
+        loss={**LOSS, "kl_warmup_steps": 0},
+    )
+    with mock.patch.object(
+        type(module), "global_step", new_callable=mock.PropertyMock, return_value=0
+    ):
+        assert module.kl_scale() == 1.0
+
+
+def test_validation_reports_latent_usage(module, datamodule):
+    """Guards the posterior-collapse failure mode this metric exists to catch."""
+    trainer = L.Trainer(
+        max_steps=1,
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        num_sanity_val_steps=0,
+        limit_val_batches=2,
+        val_check_interval=1,
+        use_distributed_sampler=False,
+    )
+    trainer.fit(module, datamodule=datamodule)
+    assert torch.isfinite(trainer.callback_metrics["val/latent_usage"])
+
+
+def test_latent_usage_is_zero_when_the_decoder_ignores_z(module, datamodule):
+    """A decoder blind to z must score 0 -- that is what collapse looks like."""
+    batch = next(iter(datamodule.val_dataloader()))
+    out = module.model(
+        phonemes=batch["phonemes"],
+        phoneme_lengths=batch["phoneme_lengths"],
+        spec=batch["spec"],
+        spec_lengths=batch["spec_lengths"],
+        f0=batch["f0"],
+        energy=batch["energy"],
+        voiced=batch["voiced"],
+        speaker_ids=batch["speaker_ids"],
+    )
+    # Force the latent to a constant: shuffling it in time then changes nothing.
+    out["z_slice"] = torch.zeros_like(out["z_slice"])
+    generated, _ = module.model.generator(
+        out["z_slice"], out["f0_slice"], out["energy_slice"], out["voiced_slice"], g=out["g"]
+    )
+    out["wav_hat"] = generated
+    assert module._latent_usage(batch, out).abs().item() == pytest.approx(0.0, abs=1e-5)

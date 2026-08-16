@@ -103,11 +103,16 @@ class AurisSingerModule(L.LightningModule):
         self.weights = {
             "mel": float(loss.get("mel", 45.0)),
             "kl": float(loss.get("kl", 1.0)),
-            "kl_aux": float(loss.get("kl_aux", 1.0)),
+            # The auxiliary term only has to keep the alignment statistic honest.
+            # At full weight it doubles the KL pressure relative to VITS, which
+            # pushes the latent toward collapse.
+            "kl_aux": float(loss.get("kl_aux", 0.2)),
             "feature_matching": float(loss.get("feature_matching", 1.0)),
             "envelope": float(loss.get("envelope", 10.0)),
             "adversarial": float(loss.get("adversarial", 1.0)),
         }
+        self.kl_free_bits = float(loss.get("kl_free_bits", 0.02))
+        self.kl_warmup_steps = int(loss.get("kl_warmup_steps", 10_000))
 
         self.learning_rate = float(optimizer.get("learning_rate", 2e-4))
         self.betas = tuple(optimizer.get("betas", (0.8, 0.99)))
@@ -161,6 +166,17 @@ class AurisSingerModule(L.LightningModule):
             f_max=self.f_max,
         )
 
+    def kl_scale(self) -> float:
+        """Linear KL warm-up factor for the current step.
+
+        The reconstruction path needs a head start: matching the prior is cheap
+        and making the latent informative is expensive, so a KL applied at full
+        weight from step 0 wins that race and the latent never recovers.
+        """
+        if self.kl_warmup_steps <= 0:
+            return 1.0
+        return min(1.0, self.global_step / self.kl_warmup_steps)
+
     def _clip(self, module: torch.nn.Module) -> None:
         if self.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(module.parameters(), self.grad_clip)
@@ -205,11 +221,17 @@ class AurisSingerModule(L.LightningModule):
         loss_mel = self.mel_loss(wav_real, wav_hat)
         loss_env = self.envelope_loss(wav_real, wav_hat)
         loss_kl = kl_loss(
-            out["z_p"], out["logs_q"], out["m_p"], out["logs_p"], out["y_mask"]
+            out["z_p"],
+            out["logs_q"],
+            out["m_p"],
+            out["logs_p"],
+            out["y_mask"],
+            free_bits=self.kl_free_bits,
         )
         # The auxiliary term is the objective monotonic alignment search
         # maximizes; keeping it in the loss stops the alignment prior from
-        # drifting away from the refined prior.
+        # drifting away from the refined prior. No free bits here — this term
+        # is about the alignment statistic, not about the latent's capacity.
         loss_kl_aux = kl_loss(
             out["z_p"],
             out["logs_q"],
@@ -218,13 +240,15 @@ class AurisSingerModule(L.LightningModule):
             out["y_mask"],
         )
 
+        kl_scale = self.kl_scale()
+
         loss_gen = (
             self.weights["adversarial"] * loss_adv
             + self.weights["feature_matching"] * loss_fm
             + self.weights["mel"] * loss_mel
             + self.weights["envelope"] * loss_env
-            + self.weights["kl"] * loss_kl
-            + self.weights["kl_aux"] * loss_kl_aux
+            + kl_scale * self.weights["kl"] * loss_kl
+            + kl_scale * self.weights["kl_aux"] * loss_kl_aux
         )
 
         opt_g.zero_grad(set_to_none=True)
@@ -242,6 +266,12 @@ class AurisSingerModule(L.LightningModule):
                 "train/envelope": loss_env,
                 "train/kl": loss_kl,
                 "train/kl_aux": loss_kl_aux,
+                "train/kl_scale": torch.tensor(kl_scale, device=loss_kl.device),
+                # Collapse watch: if sigma drifts up while the mean flattens,
+                # the latent is turning into noise and the decoder is falling
+                # back on the excitation signal alone.
+                "train/posterior_sigma": out["logs_q"].detach().float().exp().mean(),
+                "train/posterior_mean_rms": out["m_q"].detach().float().pow(2).mean().sqrt(),
             },
             prog_bar=False,
             on_step=True,
@@ -285,9 +315,53 @@ class AurisSingerModule(L.LightningModule):
         loss_mel = F.l1_loss(mel_hat, mel_real)
 
         self.log("val/mel", loss_mel, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log(
+            "val/latent_usage",
+            self._latent_usage(batch, out),
+            on_epoch=True,
+            sync_dist=True,
+        )
         self._log_source_control_metrics(batch, wav_hat[..., :length])
         if batch_idx < self.log_audio_batches:
             self._log_audio(batch_idx, wav_hat[0, :, :length], wav_real[0, :, :length])
+
+    @torch.no_grad()
+    def _latent_usage(
+        self, batch: dict[str, torch.Tensor], out: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        """How much worse the decoder gets when ``z`` is shuffled along time.
+
+        Phonetic content can only reach the decoder through ``z``; pitch and
+        loudness arrive separately through the excitation. So if permuting
+        ``z`` in time costs nothing, the latent is carrying no time-varying
+        information and the decoder is running on the excitation alone — the
+        posterior has collapsed, and the output will track pitch perfectly
+        while saying nothing.
+
+        Returns:
+            ``mel_L1(shuffled z) - mel_L1(z)``. Well above 0 means the latent
+            is doing work; near 0 means it has collapsed.
+        """
+        z_slice = out["z_slice"]
+        segment = z_slice.size(-1)
+        if segment < 2:
+            return torch.zeros((), device=z_slice.device)
+
+        permutation = torch.randperm(segment, device=z_slice.device)
+        shuffled, _ = self.model.generator(
+            z_slice[:, :, permutation],
+            out["f0_slice"],
+            out["energy_slice"],
+            out["voiced_slice"],
+            g=out["g"],
+        )
+        wav_real = slice_segments(
+            batch["wav"], out["slice_ids"] * self.hop_length, out["wav_hat"].size(-1)
+        )
+        mel_real = self._log_mel(wav_real)
+        intact = F.l1_loss(self._log_mel(out["wav_hat"]), mel_real)
+        permuted = F.l1_loss(self._log_mel(shuffled), mel_real)
+        return permuted - intact
 
     # ------------------------------------------------------------------
     @property

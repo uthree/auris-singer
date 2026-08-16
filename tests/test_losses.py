@@ -130,3 +130,40 @@ def test_feature_matching_does_not_backpropagate_into_the_real_branch():
     feature_matching_loss(real, fake).backward()
     assert real[0][0].grad is None
     assert fake[0][0].grad is not None
+
+
+def test_free_bits_stops_the_kl_from_being_driven_to_zero():
+    """Without a floor, matching the prior exactly costs nothing."""
+    b, c, t = 2, 8, 20
+    logs = torch.zeros(b, c, t)
+    mask = torch.ones(b, 1, t)
+    matched = torch.zeros(b, c, t)  # z_p == m_p, logs_q == logs_p
+
+    plain = kl_loss(matched, logs, matched, logs, mask)
+    floored = kl_loss(matched, logs, matched, logs, mask, free_bits=0.5)
+    assert plain.item() < 0
+    # Every channel is clamped at the floor, so the total is c * free_bits.
+    assert floored.item() == pytest.approx(c * 0.5, rel=1e-5)
+
+
+def test_free_bits_leaves_channels_above_the_floor_untouched():
+    b, c, t = 1, 4, 10
+    logs = torch.zeros(b, c, t)
+    mask = torch.ones(b, 1, t)
+    z_p = torch.zeros(b, c, t)
+    m_p = torch.zeros(b, c, t)
+    m_p[:, 0] = 3.0  # one channel is far from the prior: KL = -0.5 + 4.5 = 4.0
+
+    floored = kl_loss(z_p, logs, m_p, logs, mask, free_bits=0.5)
+    # 4.0 for the informative channel, the floor for the other three.
+    assert floored.item() == pytest.approx(4.0 + 3 * 0.5, rel=1e-5)
+
+
+def test_free_bits_zero_matches_the_plain_estimator():
+    torch.manual_seed(0)
+    b, c, t = 2, 6, 15
+    args = (torch.randn(b, c, t), torch.zeros(b, c, t), torch.randn(b, c, t),
+            torch.zeros(b, c, t), torch.ones(b, 1, t))
+    assert kl_loss(*args, free_bits=0.0).item() == pytest.approx(
+        kl_loss(*args).item(), rel=1e-6
+    )

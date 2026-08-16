@@ -155,3 +155,53 @@ temporal resolution is traded away.
 The KL term uses the VITS single-sample estimator, normalized per frame
 (summed over channels). It is zero *in expectation* when prior and posterior
 match, and can be negative for an individual sample.
+
+## Posterior collapse: the failure mode this design invites
+
+This is the one thing to understand before changing the loss weights.
+
+Phonetic content can reach the decoder **only** through `z`. Pitch and loudness
+arrive separately, through the excitation signal. That asymmetry creates a
+shortcut that plain VITS does not have: the decoder can produce plausible,
+correctly-pitched, correctly-loud audio from the excitation alone, and treat
+`z` as noise.
+
+The KL estimator actively rewards this. Its entropy term is `-logs_q`, which is
+minimized by making the posterior *wider*. In VITS the reconstruction term
+fights back, because the decoder has nothing but `z` to work with. Here, with
+the excitation shortcut available, the entropy term can win: `σ_q` grows, `z`
+becomes noise, KL falls to zero because prior and posterior have both collapsed
+onto the same wide Gaussian — and the model sings the right notes with no
+intelligible words.
+
+A run that has collapsed looks like this: `val/f0_*` metrics near perfect,
+`train/kl` at ~0, `train/posterior_sigma` drifting above 1, and `val/mel`
+plateauing far too early. Permuting `z` along the time axis costs nothing,
+which is exactly what `val/latent_usage` measures.
+
+Two guards are on by default:
+
+* **KL warm-up** (`loss.kl_warmup_steps`) ramps the KL weight from 0, giving the
+  reconstruction path a head start before the entropy term applies.
+* **Free bits** (`loss.kl_free_bits`, nats per latent channel per frame) stops
+  the KL being minimized past a floor. Once a channel is at the floor its
+  entropy reward switches off, so the optimizer cannot buy loss by inflating
+  `σ_q`.
+
+The auxiliary KL weight also defaults to 0.2 rather than 1.0: its job is to
+keep the alignment statistic honest, and at full weight it doubles the total KL
+pressure relative to VITS.
+
+Measured effect on the JSUT-song run (21 minutes of audio, `small` preset):
+
+| | without guards | with guards |
+| --- | --- | --- |
+| `train/mel` | 0.71 @ 16.3k steps | 0.60 @ 1.9k steps |
+| `train/kl` | 0.0001 | 4.2 (at the floor) |
+| `train/posterior_sigma` | 2.08 | 1.05 |
+| `val/latent_usage` | ~0 | 0.14–0.18 |
+
+`kl_free_bits` interacts with `inter_channels`: the floor is per channel, so the
+total floor is `inter_channels * kl_free_bits`. Raising it too far disables the
+KL entirely, and inference — which samples `z` from the prior — degrades because
+prior and posterior are no longer tied.

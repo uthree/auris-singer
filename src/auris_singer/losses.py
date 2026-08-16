@@ -77,6 +77,7 @@ def kl_loss(
     m_p: torch.Tensor,
     logs_p: torch.Tensor,
     mask: torch.Tensor,
+    free_bits: float = 0.0,
 ) -> torch.Tensor:
     """KL[ q(z|x) || p(z|c) ] evaluated at the flow output ``z_p``.
 
@@ -93,14 +94,29 @@ def kl_loss(
         logs_q: ``(B, C, T)`` posterior log-scale.
         m_p, logs_p: ``(B, C, T)`` prior statistics.
         mask: ``(B, 1, T)``.
+        free_bits: per-channel KL floor in nats (Kingma et al., 2016). Channels
+            whose KL is already below the floor stop being penalized, so the
+            optimizer cannot buy loss by driving the posterior all the way onto
+            the prior. 0 disables it and reproduces the VITS objective.
+
+            This matters more here than in VITS: the decoder can read pitch and
+            loudness off the excitation signal, so collapsing ``z`` to noise is
+            a cheap local optimum that still produces plausible audio. See
+            ``doc/architecture.md``.
     """
     z_p, logs_q = z_p.float(), logs_q.float()
     m_p, logs_p, mask = m_p.float(), logs_p.float(), mask.float()
 
     kl = logs_p - logs_q - 0.5
     kl = kl + 0.5 * ((z_p - m_p) ** 2) * torch.exp(-2.0 * logs_p)
-    kl = torch.sum(kl * mask)
-    return kl / torch.sum(mask).clamp(min=1.0)
+
+    n_frames = torch.sum(mask).clamp(min=1.0)
+    if free_bits > 0.0:
+        # Average each channel over frames first, floor it, then sum over
+        # channels so the result stays on the same scale as the plain estimator.
+        per_channel = torch.sum(kl * mask, dim=[0, 2]) / n_frames
+        return torch.clamp(per_channel, min=free_bits).sum()
+    return torch.sum(kl * mask) / n_frames
 
 
 class EnvelopeLoss(nn.Module):

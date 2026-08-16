@@ -81,11 +81,18 @@ weights live under `loss:` in the training config:
 loss:
   mel: 45.0
   kl: 1.0
-  kl_aux: 1.0
+  kl_aux: 0.2             # alignment statistic only; 1.0 doubles KL pressure
   feature_matching: 1.0
   envelope: 10.0
   adversarial: 1.0
+  kl_free_bits: 0.02      # nats per latent channel per frame; 0 disables
+  kl_warmup_steps: 10000  # optimizer steps to ramp the KL weight from 0 to 1
 ```
+
+`kl_free_bits` and `kl_warmup_steps` guard against posterior collapse, which
+this architecture invites and which is worth understanding before touching any
+KL weight — see
+[architecture.md](architecture.md#posterior-collapse-the-failure-mode-this-design-invites).
 
 `envelope` is the one weight with no precedent to copy: the envelope L1 is
 computed on raw waveform amplitudes, so its raw magnitude is small compared to
@@ -148,6 +155,16 @@ against the input curves.
 | `val/energy_rmse_db` | level error of the loudness envelope | ↓ |
 | `val/energy_bias_db` | signed mean level error | negative = systematically quiet |
 | `val/energy_corr` | correlation of the two envelopes in dB | ↑ toward 1.0 |
+| `val/latent_usage` | how much worse the decoder gets when `z` is permuted in time | ↑; near 0 means posterior collapse |
+
+`val/latent_usage` is the one that catches the failure mode specific to this
+architecture. Phonetic content reaches the decoder only through `z`, while pitch
+and loudness arrive through the excitation, so a collapsed model sings the right
+notes with no intelligible words — and every other metric here still looks
+excellent. If permuting `z` along time costs the decoder nothing, the latent is
+dead; see [architecture.md](architecture.md#posterior-collapse-the-failure-mode-this-design-invites).
+`train/posterior_sigma` drifting above 1 while `train/kl` heads to 0 is the same
+story seen from the training side.
 
 `f0_rmse_cent` and `energy_bias_db` are the two to watch. A model that sounds
 plausible but ignores the source shows up here as a high pitch RMSE with a

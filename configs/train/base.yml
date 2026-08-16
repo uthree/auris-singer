@@ -27,10 +27,16 @@ audio:
 loss:
   mel: 45.0
   kl: 1.0
-  kl_aux: 1.0
+  kl_aux: 0.2
   feature_matching: 1.0
   envelope: 10.0
   adversarial: 1.0
+  # Guards against posterior collapse: the decoder can read pitch and loudness
+  # off the excitation signal, so driving the latent to noise is a cheap local
+  # optimum. Free bits stop the KL from being minimized past a floor, and the
+  # warm-up gives the reconstruction path a head start.
+  kl_free_bits: 0.02       # nats per latent channel per frame; 0 disables
+  kl_warmup_steps: 10000   # optimizer steps to ramp the KL weight from 0 to 1
   envelope_kernel_sizes: [128, 256, 512, 1024]
   mel_params:
     - [512, 120, 512, 40]
