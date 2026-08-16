@@ -84,8 +84,10 @@ def spectrogram(
     squeeze = wav.dim() == 1
     if squeeze:
         wav = wav.unsqueeze(0)
-    padded = _pad_for_stft(wav, n_fft, hop_length)
-    window = _hann_window(win_length, str(wav.device), torch.float32).to(padded.dtype)
+    # cuFFT has no half/bfloat16 kernels, so the transform always runs in
+    # float32 regardless of the surrounding autocast context.
+    padded = _pad_for_stft(wav.float(), n_fft, hop_length)
+    window = _hann_window(win_length, str(wav.device), torch.float32)
     spec = torch.stft(
         padded,
         n_fft=n_fft,

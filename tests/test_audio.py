@@ -54,6 +54,15 @@ def test_frame_energy_tracks_amplitude():
     assert torch.allclose(quiet, energy * 0.1, atol=1e-4)
 
 
+def test_spectrogram_runs_in_float32_for_reduced_precision_input():
+    """FFT kernels have no bfloat16 support, so the transform must upcast."""
+    wav = (torch.randn(1, HOP * 12) * 0.1).to(torch.bfloat16)
+    spec = spectrogram(wav, N_FFT, HOP, WIN)
+    assert spec.dtype == torch.float32
+    assert torch.isfinite(spec).all()
+    assert mel_spectrogram(wav, SAMPLE_RATE, N_FFT, HOP, WIN, 80).dtype == torch.float32
+
+
 def test_mel_spectrogram_is_log_compressed():
     wav = torch.randn(1, HOP * 30) * 0.1
     linear = mel_spectrogram(wav, SAMPLE_RATE, N_FFT, HOP, WIN, 80, log=False)

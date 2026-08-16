@@ -67,6 +67,16 @@ def test_conditioning_is_inert_at_initialization():
     assert torch.allclose(conditioned[0], unconditioned[0], atol=1e-6)
 
 
+def test_stft_discriminator_accepts_reduced_precision_input():
+    """FFT kernels have no bfloat16 support, so the STFT must run in float32."""
+    disc = MultiResolutionSTFTDiscriminator(
+        resolutions=RESOLUTIONS, n_speakers=0, channels=4, n_layers=2
+    )
+    wav = (torch.randn(1, 1, 12_000) * 0.1).to(torch.bfloat16)
+    outputs, _ = disc(wav, None)
+    assert torch.isfinite(outputs[0].float()).all()
+
+
 def test_gradients_reach_the_input_waveform():
     disc = Discriminator(
         n_speakers=2,

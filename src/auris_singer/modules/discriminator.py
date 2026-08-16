@@ -162,7 +162,9 @@ class STFTDiscriminator(nn.Module):
         self.projection = _ProjectionConditioning(n_speakers, channels)
 
     def _stft(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.squeeze(1)
+        # cuFFT has no half/bfloat16 kernels, so the transform always runs in
+        # float32; under autocast the following convolutions cast it back.
+        x = x.squeeze(1).float()
         pad = (self.n_fft - self.hop_length) // 2
         x = F.pad(x.unsqueeze(1), (pad, pad), mode="reflect").squeeze(1)
         spec = torch.stft(
@@ -170,7 +172,7 @@ class STFTDiscriminator(nn.Module):
             n_fft=self.n_fft,
             hop_length=self.hop_length,
             win_length=self.win_length,
-            window=self.window.to(x.dtype),
+            window=self.window.float(),
             center=False,
             return_complex=True,
         )
