@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest import mock
+
 import lightning as L
 import pytest
 import torch
@@ -137,6 +139,36 @@ def test_checkpoint_roundtrip_synthesizes_audio(module, datamodule, tmp_path):
     )
     assert wav.shape == (n_frames * AUDIO["hop_length"],)
     assert wav.dtype.name == "float32"
+
+
+class _FakeExperiment:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def add_audio(self, tag, audio, step, sample_rate):
+        self.calls.append(tag)
+
+
+class _FakeLogger:
+    def __init__(self):
+        self.experiment = _FakeExperiment()
+
+
+def test_reference_audio_is_logged_once_regardless_of_epoch(module):
+    """Step-based validation means epoch 0 is long gone on the first pass."""
+    logger = _FakeLogger()
+    wav = torch.zeros(1, 480)
+    with mock.patch.object(
+        type(module), "logger", new_callable=mock.PropertyMock, return_value=logger
+    ):
+        module._log_audio(0, wav, wav)
+        module._log_audio(0, wav, wav)
+        module._log_audio(1, wav, wav)
+
+    tags = logger.experiment.calls
+    assert tags.count("val/0/reference") == 1, "reference must not be re-logged"
+    assert tags.count("val/0/generated") == 2, "generated audio changes every pass"
+    assert "val/1/reference" in tags
 
 
 def test_synthesize_validates_its_inputs(module):

@@ -45,7 +45,18 @@ optimizer:
   lr_decay: 0.999875
   grad_clip: 0.0
 
+validation:
+  pitch_metrics: true      # re-analyse generated audio with FCPE
+  f0_min: 40.0
+  f0_max: 1600.0
+  tolerance_cents: 50.0    # a quarter tone; used for val/f0_accuracy
+  log_audio_batches: 4
+
 trainer:
+  # NOTE: `max_steps` counts *optimizer* steps. This module uses manual
+  # optimization with two optimizers (generator + discriminator), so it
+  # advances by 2 per batch -- max_steps here is 2x the number of batches.
+  # `val_check_interval` and `log_every_n_steps`, in contrast, count batches.
   max_steps: 500000
   accelerator: auto
   devices: 1

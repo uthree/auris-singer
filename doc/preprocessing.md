@@ -122,6 +122,46 @@ checkpoints. Symbols missing from the table are logged and encoded as `<unk>`.
 To add a language, write a front-end returning IPA symbols and register it in
 `text/__init__.py::get_frontend`.
 
+## Recipe: JSUT-song
+
+[JSUT-song](https://sites.google.com/site/shinnosuketakamichi/publication/jsut-song)
+is a convenient small corpus to start from: 27 children's songs by one singer,
+already at 48 kHz, about 25 minutes, CC BY-SA 4.0.
+
+```bash
+curl -O https://ss-takashi.sakura.ne.jp/corpus/jsut-song_ver1.zip
+curl -O https://ss-takashi.sakura.ne.jp/corpus/jsut-song_label.zip
+unzip -q jsut-song_ver1.zip -d data/raw && unzip -q jsut-song_label.zip -d data/raw
+```
+
+The recordings are 30–80 s long and there are no plain-text transcripts, so a
+preparation step is needed:
+
+```bash
+uv run python scripts/prepare_jsut_song.py \
+    --wav-dir data/raw/jsut-song_ver1/child_song/wav \
+    --label-dir data/raw/todai_child \
+    --output data/raw/jsut_song
+```
+
+This splits each recording into phrases at the pauses its label marks, and
+writes the phoneme sequence out as an IPA transcript. Songs that sustain a
+legato line with no usable pause are cut at a consonant onset instead, which in
+a CV language is a syllable boundary. Loudness is normalized per song, not per
+phrase, so phrase-to-phrase dynamics survive — which is why
+`configs/preprocess/jsut_song.yml` sets `audio.peak_normalize: false`.
+
+On this corpus it yields ~260 phrases of 0.8–8 s, 21.6 minutes total.
+
+```bash
+uv run python scripts/preprocess.py --config configs/preprocess/jsut_song.yml
+uv run python scripts/train.py --config configs/train/small.yml \
+    data.root=data/processed/jsut_song data.batch_size=12
+```
+
+Note that 20 minutes of a single singer is enough to check that the pipeline
+learns, not to produce a good voice.
+
 ## Skipped utterances
 
 An utterance is skipped when it has no transcript, produces no phonemes, is

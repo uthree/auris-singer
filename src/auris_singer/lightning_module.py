@@ -6,6 +6,7 @@ with ``automatic_optimization = False``.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import lightning as L
@@ -20,10 +21,14 @@ from auris_singer.losses import (
     generator_adversarial_loss,
     kl_loss,
 )
+from auris_singer.metrics import energy_metrics, pitch_metrics
 from auris_singer.model import AurisSinger
 from auris_singer.modules.discriminator import Discriminator
-from auris_singer.utils.audio import mel_spectrogram
-from auris_singer.utils.masks import slice_segments
+from auris_singer.preprocess.f0 import FcpeExtractor
+from auris_singer.utils.audio import frame_energy, mel_spectrogram
+from auris_singer.utils.masks import sequence_mask, slice_segments
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["AurisSingerModule"]
 
@@ -40,6 +45,8 @@ class AurisSingerModule(L.LightningModule):
         optimizer: learning rate, betas, weight decay and LR decay.
         metadata: dataset metadata (phoneme symbols, speaker map) stored in the
             checkpoint so inference needs nothing but the checkpoint file.
+        validation: validation-time settings (source-control metrics, audio
+            logging).
     """
 
     def __init__(
@@ -50,6 +57,7 @@ class AurisSingerModule(L.LightningModule):
         loss: dict[str, Any] | None = None,
         optimizer: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        validation: dict[str, Any] | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -107,6 +115,16 @@ class AurisSingerModule(L.LightningModule):
         self.weight_decay = float(optimizer.get("weight_decay", 0.0))
         self.lr_decay = float(optimizer.get("lr_decay", 0.999875))
         self.grad_clip = float(optimizer.get("grad_clip", 0.0))
+
+        validation = dict(validation or {})
+        self.pitch_metrics_enabled = bool(validation.get("pitch_metrics", True))
+        self.metric_f0_min = float(validation.get("f0_min", 40.0))
+        self.metric_f0_max = float(validation.get("f0_max", 1600.0))
+        self.metric_tolerance_cents = float(validation.get("tolerance_cents", 50.0))
+        self.log_audio_batches = int(validation.get("log_audio_batches", 4))
+        self._pitch_extractor: FcpeExtractor | None = None
+        self._pitch_extractor_failed = False
+        self._logged_reference_audio: set[int] = set()
 
     # ------------------------------------------------------------------
     def configure_optimizers(self):
@@ -267,8 +285,83 @@ class AurisSingerModule(L.LightningModule):
         loss_mel = F.l1_loss(mel_hat, mel_real)
 
         self.log("val/mel", loss_mel, prog_bar=True, on_epoch=True, sync_dist=True)
-        if batch_idx < 4:
+        self._log_source_control_metrics(batch, wav_hat[..., :length])
+        if batch_idx < self.log_audio_batches:
             self._log_audio(batch_idx, wav_hat[0, :, :length], wav_real[0, :, :length])
+
+    # ------------------------------------------------------------------
+    @property
+    def pitch_extractor(self) -> FcpeExtractor | None:
+        """Lazily built FCPE extractor used to re-analyse generated audio."""
+        if self._pitch_extractor_failed or not self.pitch_metrics_enabled:
+            return None
+        if self._pitch_extractor is None or str(self._pitch_extractor.device) != str(
+            self.device
+        ):
+            try:
+                extractor = FcpeExtractor(
+                    device=str(self.device),
+                    f0_min=self.metric_f0_min,
+                    f0_max=self.metric_f0_max,
+                )
+                extractor.model  # force construction here, not mid-metric
+                self._pitch_extractor = extractor
+            except Exception as exc:  # pragma: no cover - depends on environment
+                logger.warning("pitch metrics disabled, FCPE unavailable: %s", exc)
+                self._pitch_extractor_failed = True
+                return None
+        return self._pitch_extractor
+
+    @torch.no_grad()
+    def _log_source_control_metrics(
+        self, batch: dict[str, torch.Tensor], wav_hat: torch.Tensor
+    ) -> None:
+        """Measure how closely the output follows the requested f0 and energy.
+
+        Pitch and loudness reach the decoder only through the excitation
+        signal, so re-analysing the generated waveform and comparing it with
+        the input curves directly measures whether that control works.
+        """
+        n_frames = wav_hat.size(-1) // self.hop_length
+        if n_frames < 2:
+            return
+        wav = wav_hat.squeeze(1).float()
+
+        valid = sequence_mask(
+            batch["spec_lengths"].clamp(max=n_frames), n_frames
+        ).float()
+
+        pred_energy = frame_energy(wav, self.n_fft, self.hop_length, self.win_length)
+        metrics = energy_metrics(batch["energy"][:, :n_frames], pred_energy, valid)
+
+        extractor = self.pitch_extractor
+        if extractor is not None:
+            try:
+                pred_f0, pred_voiced = extractor(wav, self.sample_rate, n_frames)
+            except Exception as exc:  # pragma: no cover - depends on environment
+                logger.warning("pitch metrics disabled, FCPE failed: %s", exc)
+                self._pitch_extractor_failed = True
+            else:
+                metrics.update(
+                    pitch_metrics(
+                        target_f0=batch["f0"][:, :n_frames],
+                        target_voiced=batch["voiced"][:, :n_frames],
+                        pred_f0=pred_f0.to(wav.device),
+                        pred_voiced=pred_voiced.to(wav.device),
+                        valid=valid,
+                        tolerance_cents=self.metric_tolerance_cents,
+                    )
+                )
+
+        # A metric with no frames to average over is NaN; logging it would
+        # poison the epoch mean, so those are dropped instead.
+        finite = {
+            f"val/{name}": value
+            for name, value in metrics.items()
+            if torch.isfinite(value)
+        }
+        if finite:
+            self.log_dict(finite, on_epoch=True, sync_dist=True)
 
     def _log_audio(
         self, index: int, wav_hat: torch.Tensor, wav_real: torch.Tensor
@@ -283,7 +376,12 @@ class AurisSingerModule(L.LightningModule):
             self.global_step,
             self.sample_rate,
         )
-        if self.current_epoch == 0:
+        # The reference never changes, so log it once per utterance. Keying on
+        # the first validation pass rather than on epoch 0 matters: with a
+        # step-based `val_check_interval`, epoch 0 is usually long gone by the
+        # time validation first runs.
+        if index not in self._logged_reference_audio:
+            self._logged_reference_audio.add(index)
             experiment.add_audio(
                 f"val/{index}/reference",
                 wav_real.float().cpu(),

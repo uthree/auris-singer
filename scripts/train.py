@@ -43,6 +43,7 @@ def build(config):
         audio=OmegaConf.to_container(config.audio, resolve=True),
         loss=OmegaConf.to_container(config.loss, resolve=True),
         optimizer=OmegaConf.to_container(config.optimizer, resolve=True),
+        validation=OmegaConf.to_container(config.get("validation", {}), resolve=True),
         metadata={
             "symbols": datamodule.phoneme_table.symbols,
             "speaker_to_id": datamodule.speaker_to_id,
