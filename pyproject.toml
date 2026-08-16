@@ -1,0 +1,48 @@
+[project]
+name = "auris-singer"
+version = "0.1.0"
+description = "VITS-based singing voice synthesizer with an NSF-HiFi-GAN vocoder at 48 kHz"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { file = "LICENSE" }
+dependencies = [
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "lightning>=2.4",
+    "omegaconf>=2.3",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "soundfile>=0.12",
+    "numba>=0.59",
+    "tqdm>=4.66",
+    "torchfcpe>=0.0.4",
+    "jpreprocess>=0.1.7",
+    "tensorboard>=2.16",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/auris_singer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+ignore = ["E501"]
