@@ -31,6 +31,18 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# PyTorch is pinned to the CUDA 12.8 wheels: the default PyPI wheels are built
+# against a newer CUDA runtime than many drivers support. Change the index URL
+# (e.g. to `.../whl/cpu` or `.../whl/cu126`) to match your driver.
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchaudio = { index = "pytorch" }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/auris_singer"]
 
@@ -38,6 +50,9 @@ packages = ["src/auris_singer"]
 testpaths = ["tests"]
 addopts = "-q"
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "slow: tests that load the FCPE model or the jpreprocess dictionary (deselect with '-m \"not slow\"')",
+]
 
 [tool.ruff]
 line-length = 100

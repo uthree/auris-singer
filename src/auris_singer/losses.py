@@ -80,6 +80,14 @@ def kl_loss(
 ) -> torch.Tensor:
     """KL[ q(z|x) || p(z|c) ] evaluated at the flow output ``z_p``.
 
+    This is the single-sample estimator used by VITS: the ``E[eps^2] / 2`` term
+    of ``log q`` is replaced by its expectation, so the value is 0 *in
+    expectation* when the two distributions match, and can be negative for an
+    individual sample.
+
+    The result is normalized per frame (summed over channels), matching VITS,
+    so the ``kl`` loss weight keeps its usual scale.
+
     Args:
         z_p: ``(B, C, T)`` posterior sample pushed through the flow.
         logs_q: ``(B, C, T)`` posterior log-scale.
@@ -92,7 +100,7 @@ def kl_loss(
     kl = logs_p - logs_q - 0.5
     kl = kl + 0.5 * ((z_p - m_p) ** 2) * torch.exp(-2.0 * logs_p)
     kl = torch.sum(kl * mask)
-    return kl / torch.sum(mask * z_p.size(1)).clamp(min=1.0)
+    return kl / torch.sum(mask).clamp(min=1.0)
 
 
 class EnvelopeLoss(nn.Module):
