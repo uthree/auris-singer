@@ -253,6 +253,46 @@ percentile is 225 Hz, so that is the edge of the training distribution and not
 a property of the architecture: the same model trained with 45 % of its frames
 below 200 Hz tracks a −24st transposition to within 52 cents.
 
+#### How low the mixed model actually goes
+
+Pushing the mixed model further down, on a male utterance, the failure mode is
+specific: a growing fraction of frames jump an **octave up**, while the median
+frame stays correct.
+
+| target f0 | frames within 100 cents | frames an octave high |
+| --- | --- | --- |
+| 85 Hz | 99 % | 0 % |
+| 72 Hz | 93 % | 7 % |
+| 69 Hz | 72 % | 28 % |
+| 59 Hz | 66 % | 32 % |
+
+The corpus floor is 87 Hz (`vocalset_male8`'s 1st percentile), with only 1.3 %
+of frames in 80–100 Hz — so once again the breakdown starts exactly where the
+data runs out. Below that the model falls back on the octave above, which *is*
+in distribution.
+
+Four other explanations were measured and ruled out, so this really is a data
+limit and not something to fix in the model:
+
+* not frame dropouts — the excitation's own level error holds at ±0.2 dB with
+  0 % of frames below −6 dB all the way to 42 Hz;
+* not `tanh` saturation — pre-`tanh` activations peak near |x| = 1, 0.0 % above 2;
+* not the pitch tracker — FCPE reads a synthetic dense-harmonic tone at
+  50–70 Hz to within a few cents;
+* not the receptive field — the decoder's source path spans 2.9 s, which is
+  115 periods even at 40 Hz.
+
+Degradation is graceful: no dropouts, and `energy_bias_db` saturates around
+−2.8 dB rather than running away.
+
+Extending the range further means data down to about 65 Hz — C2, the practical
+floor of written bass parts — from a bass-heavy corpus such as the bass sections
+of [Dagstuhl ChoirSet](https://transactions.ismir.net/articles/10.5334/tismir.48)
+or M4Singer. Below roughly 65 Hz there is little point looking: modal singing
+that low exists essentially only in the Russian *oktavist* tradition and no
+machine-learning corpus covers it, while Tuvan and Tibetan low chant is
+subharmonic phonation, which an impulse-train excitation does not model.
+
 Loudness is the weaker half. `energy_bias_db` still falls to −3.9 dB at −24st
 even in the mixed run (from −5.3 dB), so deep transposition comes out quieter
 than asked for. Note the scope before worrying about it: validation never
