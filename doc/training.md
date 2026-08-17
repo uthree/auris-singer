@@ -255,9 +255,50 @@ below 200 Hz tracks a −24st transposition to within 52 cents.
 
 Loudness is the weaker half. `energy_bias_db` still falls to −3.9 dB at −24st
 even in the mixed run (from −5.3 dB), so deep transposition comes out quieter
-than asked for. The envelope loss is computed on waveform amplitude, where a
-low-f0 signal of equal RMS has a different crest factor, and nothing in the
-current objective corrects for that.
+than asked for. Note the scope before worrying about it: validation never
+transposes, so at the pitch a speaker was trained at the bias is +0.1 dB and
+none of this is audible in the validation audio. It is a controllability limit
+at the extremes, not an audio-quality defect, and a front-end that supplies the
+energy curve can compensate for a known offset.
+
+Two candidate causes were measured and ruled out. The excitation is not at
+fault: its own level error stays at +0.2 dB across the whole range with no
+frames below −6 dB, so the `sqrt(sample_rate / f0)` normalization does its job.
+Nor is it output saturation: the pre-`tanh` activations peak at
+|x| ≈ 1 with 0.0 % of samples above 2, well inside the linear region. The
+attenuation is produced inside the convolution stack.
+
+What the data shows instead is that **f0 and energy are strongly correlated in
+sung audio**, and the decoder learned that correlation:
+
+| speaker | corr(log f0, energy dB) | slope |
+| --- | --- | --- |
+| `jsut_song` | +0.61 | +12.8 dB/octave |
+| `vocalset_male11` | +0.62 | +10.0 dB/octave |
+| `vocalset_male8` | +0.61 | +9.2 dB/octave |
+| `vocalset_male1` | +0.43 | +7.9 dB/octave |
+| `vocalset_male3` | +0.36 | +7.5 dB/octave |
+
+High notes are sung louder. Transposing down two octaves while insisting on the
+original energy asks for a `(f0, energy)` pair that never occurs in the corpus,
+and the output lands between what the excitation amplitude says and what the
+learned prior expects.
+
+Reinforcing that, the objective contains **no term referring to the requested
+energy at all** — only mel, envelope, adversarial, feature matching and KL,
+each comparing against the real waveform, which in training always already has
+the matching level. Matching the target and matching the reference are
+therefore indistinguishable constraints, and gain equivariance is never
+learned: over a 24 dB energy request the output moves only 20–21 dB.
+
+Two fixes follow from that, should this ever matter: scale waveform and energy
+curve together by a random gain during training, and add an explicit dB error
+between the output's frame RMS and the requested energy. Neither is implemented.
+
+Note that the upward direction is a **different** failure and should not be
+lumped in with the above: a male voice pushed to +19st is also 3.8 dB quiet,
+which the correlation predicts should go the other way, and 11 % of its frames
+fall below −6 dB. That is off-manifold breakdown, not a gain offset.
 
 Two cautions when reading these numbers on a mixed corpus:
 
