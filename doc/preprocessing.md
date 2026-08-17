@@ -162,6 +162,69 @@ uv run python scripts/train.py --config configs/train/small.yml \
 Note that 20 minutes of a single singer is enough to check that the pipeline
 learns, not to produce a good voice.
 
+## Recipe: VocalSet, for the low pitch range
+
+JSUT-song is one soprano, and its pitch distribution is narrower than it looks:
+
+| | JSUT-song alone | with four VocalSet males |
+| --- | --- | --- |
+| 1st percentile f0 | 225 Hz | 91 Hz |
+| median f0 | 392 Hz | 217 Hz |
+| voiced frames below 200 Hz | 0.3 % | 45 % |
+
+A model trained on the first column has never seen the dense harmonic structure
+of a low voice. Since f0 reaches the decoder only through the excitation, its
+behaviour down there is not merely untrained but untested.
+
+[VocalSet](https://zenodo.org/records/1193957) fills that in: 20 professional
+singers (11 male) at 44.1 kHz, CC BY 4.0, and a direct download.
+
+```bash
+curl -L -o VocalSet.zip 'https://zenodo.org/records/1193957/files/VocalSet.zip?download=1'
+unzip -q VocalSet.zip -d data/raw/VocalSet
+```
+
+```bash
+uv run python scripts/prepare_vocalset.py \
+    --source data/raw/VocalSet/FULL \
+    --output data/raw/vocalset \
+    --max-seconds 7.5
+```
+
+```bash
+uv run python scripts/preprocess.py --config configs/preprocess/jsut_song_vocalset.yml
+```
+
+What the recipe does, and why:
+
+* **Four speakers, not eleven.** `male8`, `male11`, `male3` and `male1` are the
+  male singers with the lowest median f0, measured with FCPE. `male9` is a high
+  tenor (median 330 Hz) and adds nothing this mix is for.
+* **Normal phonation only.** `vocal_fry`, `inhaled`, `lip_trill`, `trill` and
+  `trillo` are dropped. Their glottal behaviour is aperiodic or absent, so a
+  pitch tracker's output is unreliable and an impulse train is the wrong source
+  model for them.
+* **One gain per speaker, not per clip.** VocalSet sits 8–14 dB below
+  JSUT-song. Frame energy is a conditioning input, so leaving that gap in would
+  teach the model that the low-pitched speakers are also the quiet ones — and
+  the low-f0 behaviour would only ever be seen at low energy. The gain is
+  per speaker so that VocalSet's deliberate `pp`/`forte` contrast survives; it
+  is capped to avoid clipping, which leaves a residual 3–5 dB gap.
+* **`--max-seconds 7.5`** keeps every clip under the 800-frame `data.max_frames`
+  of the `small` preset. At the 10 s default, 30 % of the clips would be
+  silently dropped by the dataset filter instead.
+
+Two limitations to keep in mind:
+
+* **These speakers sing single vowels.** Outside three excerpts, VocalSet is
+  scales, arpeggios and sustained tones on one vowel, so the transcript is
+  `<sil> a <sil>` and nothing more. They contribute pitch range, not phonetics,
+  and their speaker embeddings are only ever trained on vowels.
+* **The mix bottoms out near 85 Hz, not 50 Hz.** In this corpus only vocal fry
+  goes lower, and fry is exactly the phonation the impulse-train source cannot
+  represent. 85 Hz is close to the practical floor of sung voice anyway — the
+  bottom of the bass staff, E2, is 82 Hz.
+
 ## Skipped utterances
 
 An utterance is skipped when it has no transcript, produces no phonemes, is
