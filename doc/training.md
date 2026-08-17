@@ -231,6 +231,46 @@ a corpus that never goes that high is not a fair test; above, the ±7 semitone
 extremes cost a few cents and about 1 dB of level, while the inner conditions
 are indistinguishable from the reference.
 
+### The training pitch range is the range that works
+
+A wide transposition sweep on one JSUT-song utterance (median f0 392 Hz) shows
+where control ends, and that it ends exactly at the edge of the data. The right
+column adds the four low-pitched VocalSet singers described in
+[preprocessing.md](preprocessing.md#recipe-vocalset-for-the-low-pitch-range);
+nothing else about the two runs differs.
+
+| transposition | ≈ f0 | JSUT-song only | + VocalSet males |
+| --- | --- | --- | --- |
+| 0 | 392 Hz | 33.6 cent / corr 0.993 | 33.6 / 0.993 |
+| −12st | 196 Hz | 35.7 / 0.992 | 34.2 / 0.993 |
+| −14st | 174 Hz | **212.5 / 0.746** | 34.6 / 0.993 |
+| −17st | 147 Hz | **337.3 / 0.633** | 42.8 / 0.989 |
+| −19st | 131 Hz | **200.9 / 0.809** | 37.6 / 0.991 |
+| −24st | 98 Hz | **391.4 / 0.479** | 51.6 / 0.984 |
+
+Control collapses below about 175 Hz in the left column. JSUT-song's 1st
+percentile is 225 Hz, so that is the edge of the training distribution and not
+a property of the architecture: the same model trained with 45 % of its frames
+below 200 Hz tracks a −24st transposition to within 52 cents.
+
+Loudness is the weaker half. `energy_bias_db` still falls to −3.9 dB at −24st
+even in the mixed run (from −5.3 dB), so deep transposition comes out quieter
+than asked for. The envelope loss is computed on waveform amplitude, where a
+low-f0 signal of equal RMS has a different crest factor, and nothing in the
+current objective corrects for that.
+
+Two cautions when reading these numbers on a mixed corpus:
+
+* `val/latent_usage` is **not** comparable across corpora. VocalSet utterances
+  are one sustained vowel, so permuting `z` along time removes nothing that
+  should matter and the metric reads near 0 by construction. Split it by
+  speaker before concluding anything: on the mixed run it is 0.245 on
+  JSUT-song utterances against 0.252 for the JSUT-only run — unchanged — while
+  the single-vowel speakers score 0.003–0.13 and drag the average to 0.05.
+* `val/f0_rmse_cent` improves (17.8 → 9.9 cent) partly because the mixed
+  validation set is dominated by sustained vowels, which are easier to track
+  than sung Japanese.
+
 ## Checkpoints
 
 `ModelCheckpoint` monitors `val/mel` and writes to `checkpoint.dirpath`, keeping
