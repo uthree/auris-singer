@@ -192,14 +192,20 @@ The auxiliary KL weight also defaults to 0.2 rather than 1.0: its job is to
 keep the alignment statistic honest, and at full weight it doubles the total KL
 pressure relative to VITS.
 
-Measured effect on the JSUT-song run (21 minutes of audio, `small` preset):
+Measured effect on the JSUT-song run (21 minutes of audio, `small` preset).
+Steps are optimizer steps; the guarded run was taken to 40k:
 
 | | without guards | with guards |
 | --- | --- | --- |
-| `train/mel` | 0.71 @ 16.3k steps | 0.60 @ 1.9k steps |
-| `train/kl` | 0.0001 | 4.2 (at the floor) |
-| `train/posterior_sigma` | 2.08 | 1.05 |
-| `val/latent_usage` | ~0 | 0.14–0.18 |
+| `train/mel` | 0.71 @ 16.3k | 0.53 @ 10k, 0.45 @ 20k, 0.41 @ 40k |
+| `train/kl` | 0.0001 | 3.9–4.5 (resting on the floor) |
+| `train/posterior_sigma` | 2.08 | 0.98 → 1.33 |
+| `train/posterior_mean_rms` | — | 0.80 → 1.29 |
+| `val/latent_usage` | ~0 | 0.18 → 0.33 |
+
+`posterior_mean_rms` rising while `posterior_sigma` stays near 1 is the signature
+of a healthy latent: the posterior is moving its mean around to carry
+information rather than widening to cheat the entropy term.
 
 `kl_free_bits` interacts with `inter_channels`: the floor is per channel, so the
 total floor is `inter_channels * kl_free_bits`. Raising it too far disables the

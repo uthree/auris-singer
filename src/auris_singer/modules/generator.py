@@ -203,6 +203,7 @@ class NsfHifiGanGenerator(nn.Module):
         energy: torch.Tensor,
         voiced: torch.Tensor | None = None,
         g: torch.Tensor | None = None,
+        source: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -211,11 +212,18 @@ class NsfHifiGanGenerator(nn.Module):
             energy: ``(B, 1, T)`` linear RMS energy.
             voiced: ``(B, 1, T)`` binary voiced flag.
             g: ``(B, cond_channels, 1)`` speaker condition.
+            source: precomputed ``(B, 1, T * hop_length)`` excitation. The
+                generator is stochastic — unvoiced frames and the breathiness
+                component of voiced frames are fresh noise on every call — so
+                two runs with identical arguments do not produce identical
+                audio. Pass a source back in to compare two runs that differ
+                only in ``x``; ``f0``, ``energy`` and ``voiced`` are then unused.
 
         Returns:
             ``(waveform, source)`` of shape ``(B, 1, T * hop_length)``.
         """
-        source = self.source_generator(f0, energy, voiced)
+        if source is None:
+            source = self.source_generator(f0, energy, voiced)
 
         h = self.conv_pre(x)
         if self.cond is not None and g is not None:

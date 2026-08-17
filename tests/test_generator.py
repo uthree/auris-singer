@@ -95,3 +95,21 @@ def test_remove_weight_norm_preserves_output():
     # Folding the norm into the weights changes the order of operations, so
     # only float-accumulation-level differences are expected.
     assert torch.allclose(before, after, atol=1e-5)
+
+
+def test_a_supplied_source_makes_the_generator_deterministic():
+    """The excitation is stochastic; reusing it isolates the effect of z."""
+    torch.manual_seed(0)
+    gen = build(cond_channels=0)
+    z = torch.randn(1, 8, 6)
+    f0 = torch.full((1, 1, 6), 220.0)
+    energy = torch.full((1, 1, 6), 0.1)
+    voiced = torch.ones(1, 1, 6)
+
+    first, source = gen(z, f0, energy, voiced)
+    again, _ = gen(z, f0, energy, voiced)
+    reused, echoed = gen(z, f0, energy, voiced, source=source)
+
+    assert not torch.allclose(first, again), "a fresh excitation should differ"
+    assert torch.equal(echoed, source)
+    assert torch.allclose(first, reused, atol=1e-6)

@@ -242,9 +242,15 @@ def test_latent_usage_is_zero_when_the_decoder_ignores_z(module, datamodule):
         speaker_ids=batch["speaker_ids"],
     )
     # Force the latent to a constant: shuffling it in time then changes nothing.
+    # The excitation must be held fixed too, or its noise alone moves the score.
     out["z_slice"] = torch.zeros_like(out["z_slice"])
     generated, _ = module.model.generator(
-        out["z_slice"], out["f0_slice"], out["energy_slice"], out["voiced_slice"], g=out["g"]
+        out["z_slice"],
+        out["f0_slice"],
+        out["energy_slice"],
+        out["voiced_slice"],
+        g=out["g"],
+        source=out["source"],
     )
     out["wav_hat"] = generated
     assert module._latent_usage(batch, out).abs().item() == pytest.approx(0.0, abs=1e-5)

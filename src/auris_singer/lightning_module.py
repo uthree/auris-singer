@@ -338,6 +338,10 @@ class AurisSingerModule(L.LightningModule):
         posterior has collapsed, and the output will track pitch perfectly
         while saying nothing.
 
+        The excitation from the intact run is reused rather than regenerated:
+        it is stochastic, so a fresh one would put a noise floor under the
+        metric and make a collapsed model score above 0.
+
         Returns:
             ``mel_L1(shuffled z) - mel_L1(z)``. Well above 0 means the latent
             is doing work; near 0 means it has collapsed.
@@ -354,6 +358,7 @@ class AurisSingerModule(L.LightningModule):
             out["energy_slice"],
             out["voiced_slice"],
             g=out["g"],
+            source=out["source"],
         )
         wav_real = slice_segments(
             batch["wav"], out["slice_ids"] * self.hop_length, out["wav_hat"].size(-1)

@@ -163,6 +163,8 @@ and loudness arrive through the excitation, so a collapsed model sings the right
 notes with no intelligible words — and every other metric here still looks
 excellent. If permuting `z` along time costs the decoder nothing, the latent is
 dead; see [architecture.md](architecture.md#posterior-collapse-the-failure-mode-this-design-invites).
+Both decoder passes reuse the *same* excitation, so a collapsed model scores a
+true 0 rather than the noise floor a freshly drawn excitation would leave.
 `train/posterior_sigma` drifting above 1 while `train/kl` heads to 0 is the same
 story seen from the training side.
 
@@ -208,19 +210,26 @@ uv run python scripts/check_source_control.py \
     --output-dir runs/base/control_check
 ```
 
+Measured on the 40k-step JSUT-song run:
+
 ```
 condition             f0 err (cent)   f0 acc  f0 corr   energy bias (dB)  energy corr
-reference                      39.6    0.965   0.9905              -0.74        0.927
-pitch_down_2st                 38.2    0.957   0.9909              -1.06        0.919
-pitch_up_3st                   31.3    0.968   0.9942              -1.72        0.907
-energy_x0.5                    38.6    0.962   0.9910              -1.16        0.881
+reference                      30.7    0.948   0.9941               0.21        0.960
+pitch_down_5st                 41.7    0.923   0.9895              -0.73        0.960
+pitch_down_2st                 31.9    0.934   0.9939              -0.02        0.959
+pitch_up_3st                   25.7    0.947   0.9959               0.16        0.961
+pitch_up_7st                   34.1    0.934   0.9929              -1.54        0.923
+energy_x0.5                    35.3    0.953   0.9920               1.06        0.942
+energy_x2                      31.9    0.948   0.9938              -0.95        0.955
 ```
 
 The error should stay roughly flat as the curve moves: that means the output
 tracked the *new* target, not the one it was trained on. A sharp rise under
 transposition means the model is reconstructing from memory instead of being
 controlled. Expect degradation far outside the training pitch range — `+7st` on
-a corpus that never goes that high is not a fair test.
+a corpus that never goes that high is not a fair test; above, the ±7 semitone
+extremes cost a few cents and about 1 dB of level, while the inner conditions
+are indistinguishable from the reference.
 
 ## Checkpoints
 
