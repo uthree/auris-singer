@@ -72,6 +72,20 @@ def test_impulse_normalization_keeps_rms_flat_across_pitch(generator):
     assert low_rms == pytest.approx(high_rms, rel=0.15)
 
 
+def test_explicit_noise_makes_the_excitation_deterministic(generator):
+    n_frames = 20
+    f0 = torch.cat([torch.zeros(1, 1, 10), torch.full((1, 1, 10), 220.0)], dim=-1)
+    energy = torch.ones(1, 1, n_frames)
+    noise = torch.rand(1, 1, n_frames * HOP) * 2.0 - 1.0
+
+    once = generator(f0, energy, noise=noise)
+    twice = generator(f0, energy, noise=noise)
+    assert torch.equal(once, twice)
+    # Fresh internal noise differs in the unvoiced half, so the argument is
+    # actually being used rather than ignored.
+    assert not torch.equal(once, generator(f0, energy))
+
+
 def test_voiced_flag_is_derived_from_f0_when_missing(generator):
     f0 = torch.cat([torch.zeros(1, 1, 10), torch.full((1, 1, 10), 220.0)], dim=-1)
     energy = torch.ones(1, 1, 20)

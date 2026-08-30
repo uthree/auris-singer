@@ -69,6 +69,7 @@ class SourceSignalGenerator(nn.Module):
         f0: torch.Tensor,
         energy: torch.Tensor,
         voiced: torch.Tensor | None = None,
+        noise: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -77,6 +78,10 @@ class SourceSignalGenerator(nn.Module):
             energy: ``(B, 1, T)`` linear RMS energy per frame.
             voiced: ``(B, 1, T)`` binary voiced flag; derived from ``f0`` when
                 omitted.
+            noise: ``(B, 1, T * hop_length)`` uniform noise on ``[-1, 1]``,
+                drawn fresh when omitted. Passing it in makes the excitation a
+                pure function of its inputs, which is what a seedable render
+                and the ONNX export need.
 
         Returns:
             ``(B, 1, T * hop_length)`` excitation signal.
@@ -104,7 +109,8 @@ class SourceSignalGenerator(nn.Module):
         if self.normalize_impulse:
             impulse = impulse * torch.sqrt(self.sample_rate / f0_up)
 
-        noise = torch.rand_like(impulse) * 2.0 - 1.0
+        if noise is None:
+            noise = torch.rand_like(impulse) * 2.0 - 1.0
         harmonic = impulse + noise * self.voiced_noise_amplitude
         source = harmonic * voiced_up + noise * self.noise_amplitude * (1.0 - voiced_up)
         return source * env_up
