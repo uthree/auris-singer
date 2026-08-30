@@ -78,6 +78,30 @@ def test_wrapper_is_deterministic(model):
     assert torch.equal(source_a, source_b)
 
 
+def test_portrait_roundtrips_and_rejects_the_wrong_things(tmp_path):
+    import base64
+
+    from auris_singer.export import load_portrait
+
+    # A 1x1 PNG: enough to prove bytes survive the base64 round trip.
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQAB"
+        "h6FO1AAAAABJRU5ErkJggg=="
+    )
+    (tmp_path / "portrait.png").write_bytes(png)
+    card = load_portrait(tmp_path / "portrait.png")
+    assert card["mime"] == "image/png"
+    assert base64.b64decode(card["base64"]) == png
+
+    (tmp_path / "portrait.bmp").write_bytes(png)
+    with pytest.raises(ValueError, match="unsupported portrait type"):
+        load_portrait(tmp_path / "portrait.bmp")
+
+    (tmp_path / "huge.png").write_bytes(b"\0" * (8 * 1024 * 1024 + 1))
+    with pytest.raises(ValueError, match="keep it under"):
+        load_portrait(tmp_path / "huge.png")
+
+
 def test_onnx_export_runs_and_matches_pytorch(model, tmp_path):
     pytest.importorskip("onnxruntime")
     onnx = pytest.importorskip("onnx")
@@ -86,7 +110,12 @@ def test_onnx_export_runs_and_matches_pytorch(model, tmp_path):
     from auris_singer.export import METADATA_KEY, export_onnx, verify_onnx
 
     path = tmp_path / "tiny.onnx"
-    export_onnx(model, path, metadata={"symbols": ["<pad>", "a"], "speaker_to_id": {"x": 0}})
+    export_onnx(
+        model,
+        path,
+        metadata={"symbols": ["<pad>", "a"], "speaker_to_id": {"x": 0}},
+        voice={"name": "Test Singer", "description": "a demo voice", "credits": ["someone"]},
+    )
 
     # verify_onnx runs onnxruntime at sizes the trace never saw (so a baked-in
     # dimension fails here) and raises on any tolerance violation.
@@ -100,5 +129,6 @@ def test_onnx_export_runs_and_matches_pytorch(model, tmp_path):
     assert stored["sample_rate"] == 48_000
     assert stored["hop_length"] == HOP
     assert stored["inter_channels"] == model.inter_channels
+    assert stored["voice"]["name"] == "Test Singer"
     sidecar = json.loads((tmp_path / "tiny.json").read_text(encoding="utf-8"))
     assert sidecar == stored

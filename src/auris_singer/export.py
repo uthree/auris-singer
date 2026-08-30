@@ -25,10 +25,41 @@ import torch.nn as nn
 from auris_singer.model import AurisSinger
 from auris_singer.utils.masks import sequence_mask
 
-__all__ = ["OnnxSingerWrapper", "export_onnx", "verify_onnx", "METADATA_KEY"]
+__all__ = ["OnnxSingerWrapper", "export_onnx", "verify_onnx", "load_portrait", "METADATA_KEY"]
 
 #: The ``metadata_props`` key under which the model's JSON metadata is stored.
 METADATA_KEY = "auris_singer"
+
+#: Image types a voice-card portrait may use.
+PORTRAIT_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                 ".webp": "image/webp"}
+
+#: Refuse portraits larger than this — the whole point of embedding is one
+#: self-contained model file, not a model file that is mostly artwork.
+PORTRAIT_MAX_BYTES = 8 * 1024 * 1024
+
+
+def load_portrait(path: str | Path) -> dict[str, str]:
+    """Read an image into the ``portrait`` field of a voice card.
+
+    Returns ``{"mime": ..., "base64": ...}`` — the shape a consumer decodes
+    back into bytes. Raises on an unknown extension or an oversized file.
+    """
+    import base64
+
+    path = Path(path)
+    mime = PORTRAIT_MIME.get(path.suffix.lower())
+    if mime is None:
+        raise ValueError(
+            f"unsupported portrait type {path.suffix!r}; use one of {sorted(PORTRAIT_MIME)}"
+        )
+    data = path.read_bytes()
+    if len(data) > PORTRAIT_MAX_BYTES:
+        raise ValueError(
+            f"portrait is {len(data) / 1e6:.1f} MB; keep it under "
+            f"{PORTRAIT_MAX_BYTES / 1e6:.0f} MB"
+        )
+    return {"mime": mime, "base64": base64.b64encode(data).decode("ascii")}
 
 
 class OnnxSingerWrapper(nn.Module):
@@ -165,6 +196,7 @@ def export_onnx(
     path: str | Path,
     metadata: dict[str, Any] | None = None,
     opset: int = 18,
+    voice: dict[str, Any] | None = None,
 ) -> None:
     """Export the inference path to ``path`` as ONNX.
 
@@ -177,6 +209,12 @@ def export_onnx(
     parameters and stored twice: as JSON under the :data:`METADATA_KEY` key of
     the ONNX ``metadata_props``, and as a ``.json`` sidecar next to ``path``
     for consumers that would rather not parse protobuf.
+
+    ``voice`` is the presentational **voice card** — free-form fields a host
+    application shows to people rather than feeds to the model: ``name``,
+    ``description``, ``author``, ``license``, ``credits``, and a ``portrait``
+    (see :func:`load_portrait`). It is stored under the ``voice`` key of the
+    same JSON, so the one ``.onnx`` file carries everything a UI needs.
     """
     from torch.export import Dim
 
@@ -221,6 +259,8 @@ def export_onnx(
         "f0_min": model.generator.source_generator.f0_min,
         **(metadata or {}),
     }
+    if voice:
+        merged["voice"] = voice
 
     import onnx
 

@@ -18,12 +18,13 @@ Needs the ``export`` extra: ``uv pip install -e '.[export]'``.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from auris_singer.export import export_onnx, verify_onnx  # noqa: E402
+from auris_singer.export import export_onnx, load_portrait, verify_onnx  # noqa: E402
 from auris_singer.lightning_module import AurisSingerModule  # noqa: E402
 
 
@@ -37,13 +38,32 @@ def main() -> None:
         action="store_true",
         help="skip the onnxruntime comparison against PyTorch",
     )
+    parser.add_argument(
+        "--voice-card",
+        type=Path,
+        help="JSON file with presentational fields shown by a host UI "
+        "(name, description, author, license, credits, ...)",
+    )
+    parser.add_argument(
+        "--portrait",
+        type=Path,
+        help="character image embedded into the voice card (png/jpeg/webp, <=8 MB)",
+    )
     args = parser.parse_args()
 
     module = AurisSingerModule.load_from_checkpoint(args.checkpoint, map_location="cpu")
     metadata = dict(module.hparams.get("metadata") or {})
 
+    voice = {}
+    if args.voice_card:
+        voice = json.loads(args.voice_card.read_text(encoding="utf-8"))
+        if not isinstance(voice, dict):
+            raise SystemExit("--voice-card must contain a JSON object")
+    if args.portrait:
+        voice["portrait"] = load_portrait(args.portrait)
+
     output = Path(args.output)
-    export_onnx(module.model, output, metadata=metadata, opset=args.opset)
+    export_onnx(module.model, output, metadata=metadata, opset=args.opset, voice=voice or None)
     size_mb = output.stat().st_size / 1e6
     print(f"wrote {output} ({size_mb:.1f} MB) and {output.with_suffix('.json').name}")
 

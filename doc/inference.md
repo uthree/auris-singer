@@ -156,6 +156,38 @@ the `.json` sidecar:
 the model config; `symbols` maps IPA strings to the ids `phonemes` wants
 (index in the list = id).
 
+### Voice card
+
+Presentational metadata — what a host application shows to a person browsing
+voices, as opposed to what it feeds the model — travels in the same JSON under
+the `voice` key:
+
+```bash
+uv run python scripts/export_onnx.py --checkpoint last.ckpt --output ritsu.onnx \
+    --voice-card card.json --portrait ritsu.png
+```
+
+`card.json` is a free-form JSON object; these field names are the convention a
+UI can rely on:
+
+```json
+{
+  "name": "波音リツ",
+  "description": "Strong low-range female voice. 107 songs, 4.4 h.",
+  "author": "...",
+  "version": "1.0",
+  "license": "Namine Ritsu singing DB terms; fine-tuning to other voices prohibited",
+  "credits": ["波音リツ", "カノン"],
+  "url": "https://..."
+}
+```
+
+`--portrait` embeds a character image (png/jpeg/webp, at most 8 MB) as
+`voice.portrait = {"mime": ..., "base64": ...}` — decode the base64 to get the
+image bytes back. Everything, artwork included, lives inside the one `.onnx`
+file (and its `.json` sidecar), so a published model file carries its own
+name, description, credit line and 立ち絵 with no companion archive to lose.
+
 From Rust, the [ort](https://ort.pyke.io) crate runs the file as-is on CPU;
 request only the `wav` output. Renders are reproducible: same inputs, same
 noise, same waveform. (Across *runtimes* the match is exact except for the
