@@ -91,12 +91,74 @@ Very large deviations from the training distribution — an octave above anythin
 in the data, say — will degrade quality; the prior is still conditioned on f0
 and energy and has only seen the training range.
 
-## Exporting for deployment
+## Exporting to ONNX
 
-```python
-module = AurisSingerModule.load_from_checkpoint("last.ckpt")
-module.model.remove_weight_norm()   # fold weight norm into the weights
+```bash
+uv pip install -e '.[export]'
+uv run python scripts/export_onnx.py \
+    --checkpoint runs/base/checkpoints/last.ckpt --output runs/base/model.onnx
 ```
 
-This is a one-way operation; do it on a copy loaded for inference, not on a
-checkpoint you intend to keep training.
+This writes `model.onnx` plus a `model.json` sidecar and, unless `--no-verify`
+is given, checks the graph against PyTorch with onnxruntime at input sizes the
+trace never saw. Weight norm is folded into the weights as part of the export
+(`remove_weight_norm()` — a one-way operation, which is why the script loads
+its own copy of the checkpoint).
+
+The graph is the same computation `Synthesizer.synthesize` runs, made a pure
+function: the random draws are inputs, so a caller that seeds its own
+generator gets bit-identical renders. All inputs are required.
+
+| input | shape | dtype | |
+| --- | --- | --- | --- |
+| `phonemes` | `(B, S)` | int64 | ids into the phoneme table in the metadata |
+| `phoneme_lengths` | `(B,)` | int64 | valid entries per row |
+| `durations` | `(B, S)` | int64 | frames per phoneme; each row sums to `T` |
+| `f0` | `(B, T)` | float32 | Hz; 0 on unvoiced and silent frames |
+| `energy` | `(B, T)` | float32 | linear RMS, as in the score input above |
+| `voiced` | `(B, T)` | float32 | 1.0 on voiced frames |
+| `speaker_ids` | `(B,)` | int64 | |
+| `noise_scale` | scalar | float32 | prior sampling temperature |
+| `z_noise` | `(B, inter_channels, T)` | float32 | standard normal draws |
+| `source_noise` | `(B, 1, T * hop_length)` | float32 | uniform on [-1, 1] |
+
+Outputs: `wav` `(B, 1, T * hop_length)` float32, and `source`, the excitation
+signal at the same shape — a diagnostics output that a runtime asked only for
+`wav` never computes.
+
+Two contract points that differ from the Python API:
+
+* **`voiced` is required, not derived from `f0`.** A DAW front-end that
+  writes pitch as a contour puts real f0 values on unvoiced consonant
+  frames; deriving voicing from `f0 > 0` would silently voice them. Decide
+  voicing from the phoneme class and say so explicitly.
+* **`sum(durations)` must equal `T` exactly** — the graph does not trim the
+  curves the way `Synthesizer.synthesize` does.
+
+The phoneme table, the speaker map and the audio parameters ride along as
+JSON, both under the `auris_singer` key of the ONNX `metadata_props` and in
+the `.json` sidecar:
+
+```json
+{
+  "format_version": 1,
+  "sample_rate": 48000,
+  "hop_length": 480,
+  "inter_channels": 192,
+  "n_speakers": 2,
+  "f0_min": 40.0,
+  "symbols": ["<pad>", "<unk>", "<sil>", "..."],
+  "speaker_to_id": {"my_singer": 0}
+}
+```
+
+`inter_channels` is there so the caller can shape `z_noise` without knowing
+the model config; `symbols` maps IPA strings to the ids `phonemes` wants
+(index in the list = id).
+
+From Rust, the [ort](https://ort.pyke.io) crate runs the file as-is on CPU;
+request only the `wav` output. Renders are reproducible: same inputs, same
+noise, same waveform. (Across *runtimes* the match is exact except for the
+excitation's impulse timing, where float32 rounding can shift an impulse by
+one sample — inaudible, and training's random phase offset makes the model
+indifferent to it by construction.)

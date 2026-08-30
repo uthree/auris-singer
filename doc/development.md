@@ -41,6 +41,7 @@ src/auris_singer/
   lightning_module.py  # training loop, losses, logging
   losses.py            # envelope / multi-param mel / KL / GAN losses
   infer.py             # Synthesizer
+  export.py            # ONNX export wrapper + verification
   modules/
     transformer.py     # RMSNorm, SwiGLU, RoPE, QK-Norm, SDPA encoder
     encoders.py        # TextEncoder, PriorEncoder, PosteriorEncoder
@@ -56,7 +57,7 @@ src/auris_singer/
 configs/
   preprocess/          # dataset preprocessing configs
   train/               # presets.yml + one config per model size
-scripts/               # preprocess.py, train.py, infer.py
+scripts/               # preprocess.py, train.py, infer.py, export_onnx.py
 tests/                 # pytest suite
 doc/                   # this documentation
 ```
