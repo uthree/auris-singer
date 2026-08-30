@@ -270,6 +270,14 @@ def export_onnx(
     entry.value = json.dumps(merged, ensure_ascii=False)
     onnx.save(proto, str(path))
 
+    # The dynamo exporter parks the weights in a sidecar "<name>.onnx.data";
+    # onnx.load pulled them back in and onnx.save above inlined them (it
+    # would have failed past 2 GB), so the sidecar is now a stale duplicate
+    # that would only mislead whoever ships the file.
+    stale = Path(str(path) + ".data")
+    if stale.exists():
+        stale.unlink()
+
     path.with_suffix(".json").write_text(
         json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

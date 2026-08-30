@@ -132,3 +132,7 @@ def test_onnx_export_runs_and_matches_pytorch(model, tmp_path):
     assert stored["voice"]["name"] == "Test Singer"
     sidecar = json.loads((tmp_path / "tiny.json").read_text(encoding="utf-8"))
     assert sidecar == stored
+
+    # One self-contained file: the exporter's external-data sidecar must be
+    # inlined and cleaned up, not left as a stale duplicate.
+    assert not (tmp_path / "tiny.onnx.data").exists()
