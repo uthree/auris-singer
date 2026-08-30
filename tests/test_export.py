@@ -49,7 +49,7 @@ def test_wrapper_matches_infer_when_the_noise_is_pinned(model, monkeypatch):
     excitation (rand*2-1), and the wrapper is fed exactly those values."""
     inputs = wrapper_inputs(model)
     with torch.no_grad():
-        ours = OnnxSingerWrapper(model)(**inputs)
+        ours, _ = OnnxSingerWrapper(model)(**inputs)
 
     monkeypatch.setattr(torch, "randn_like", torch.zeros_like)
     monkeypatch.setattr(torch, "rand_like", torch.zeros_like)
@@ -70,5 +70,35 @@ def test_wrapper_matches_infer_when_the_noise_is_pinned(model, monkeypatch):
 
 def test_wrapper_is_deterministic(model):
     inputs = wrapper_inputs(model, batch=1)
+    wrapper = OnnxSingerWrapper(model)
     with torch.no_grad():
-        assert torch.equal(OnnxSingerWrapper(model)(**inputs), OnnxSingerWrapper(model)(**inputs))
+        wav_a, source_a = wrapper(**inputs)
+        wav_b, source_b = wrapper(**inputs)
+    assert torch.equal(wav_a, wav_b)
+    assert torch.equal(source_a, source_b)
+
+
+def test_onnx_export_runs_and_matches_pytorch(model, tmp_path):
+    pytest.importorskip("onnxruntime")
+    onnx = pytest.importorskip("onnx")
+    import json
+
+    from auris_singer.export import METADATA_KEY, export_onnx, verify_onnx
+
+    path = tmp_path / "tiny.onnx"
+    export_onnx(model, path, metadata={"symbols": ["<pad>", "a"], "speaker_to_id": {"x": 0}})
+
+    # verify_onnx runs onnxruntime at sizes the trace never saw (so a baked-in
+    # dimension fails here) and raises on any tolerance violation.
+    errors = verify_onnx(model, path)
+    assert errors["unvoiced_max_diff"] < 1e-4
+
+    # The metadata rides along both inside the file and as a sidecar.
+    props = {entry.key: entry.value for entry in onnx.load(str(path)).metadata_props}
+    stored = json.loads(props[METADATA_KEY])
+    assert stored["symbols"] == ["<pad>", "a"]
+    assert stored["sample_rate"] == 48_000
+    assert stored["hop_length"] == HOP
+    assert stored["inter_channels"] == model.inter_channels
+    sidecar = json.loads((tmp_path / "tiny.json").read_text(encoding="utf-8"))
+    assert sidecar == stored
