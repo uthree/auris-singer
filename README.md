@@ -35,6 +35,7 @@ See [`doc/`](doc/):
 | --- | --- |
 | [architecture.md](doc/architecture.md) | Model architecture and how it differs from VITS |
 | [preprocessing.md](doc/preprocessing.md) | Dataset layout, feature extraction, config reference |
+| [datasets.md](doc/datasets.md) | Corpus survey, license tiers, and the data policy |
 | [training.md](doc/training.md) | Training procedure, losses, presets |
 | [inference.md](doc/inference.md) | Inference API and input format |
 | [development.md](doc/development.md) | Environment, tests, repository layout |
