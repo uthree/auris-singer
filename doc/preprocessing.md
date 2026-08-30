@@ -126,7 +126,10 @@ To add a language, write a front-end returning IPA symbols and register it in
 
 [JSUT-song](https://sites.google.com/site/shinnosuketakamichi/publication/jsut-song)
 is a convenient small corpus to start from: 27 children's songs by one singer,
-already at 48 kHz, about 25 minutes, CC BY-SA 4.0.
+already at 48 kHz, about 25 minutes. The audio is licensed for academic and
+non-commercial research only (the CC BY-SA 4.0 on the JSUT page covers the
+*speech* corpus's text data, not this audio), so a checkpoint trained on it
+stays a research artifact and cannot be published.
 
 ```bash
 curl -O https://ss-takashi.sakura.ne.jp/corpus/jsut-song_ver1.zip
