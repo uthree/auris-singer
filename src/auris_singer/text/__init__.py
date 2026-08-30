@@ -10,7 +10,9 @@ from auris_singer.text.ipa import (
     SIL,
     SPECIAL_SYMBOLS,
     UNK,
+    VOICELESS,
     PhonemeTable,
+    is_voiceless,
 )
 from auris_singer.text.japanese import JapaneseFrontend, openjtalk_to_ipa
 
@@ -22,7 +24,9 @@ __all__ = [
     "SIL",
     "SPECIAL_SYMBOLS",
     "UNK",
+    "VOICELESS",
     "PhonemeTable",
+    "is_voiceless",
     "JapaneseFrontend",
     "openjtalk_to_ipa",
     "parse_ipa",

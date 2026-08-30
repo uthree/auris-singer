@@ -13,9 +13,24 @@ import numpy as np
 import torch
 
 from auris_singer.lightning_module import AurisSingerModule
-from auris_singer.text import DEFAULT_PHONEME_TABLE, PhonemeTable
+from auris_singer.text import DEFAULT_PHONEME_TABLE, PhonemeTable, is_voiceless
 
-__all__ = ["Synthesizer"]
+__all__ = ["Synthesizer", "frame_voicing"]
+
+
+def frame_voicing(
+    phonemes: list[str], durations: list[int] | np.ndarray, f0: list[float] | np.ndarray
+) -> np.ndarray:
+    """Per-frame voiced flags from the phoneme class and the f0 contour.
+
+    A frame is voiced iff its phoneme is not voiceless and its f0 is nonzero.
+    The phoneme class is the primary signal — a score front-end writes pitch
+    as a contour across consonants, so ``f0 > 0`` alone would voice every
+    /k/ and /s/; the f0 term only clears frames with no pitch at all.
+    """
+    per_phoneme = np.asarray([0.0 if is_voiceless(p) else 1.0 for p in phonemes])
+    expanded = np.repeat(per_phoneme, np.asarray(durations, dtype=np.int64))
+    return (expanded * (np.asarray(f0, dtype=np.float32) > 0.0)).astype(np.float32)
 
 
 class Synthesizer:
@@ -91,8 +106,11 @@ class Synthesizer:
             f0: per-frame f0 in Hz; 0 marks an unvoiced frame.
             energy: per-frame linear RMS energy.
             speaker: speaker name or id.
-            voiced: optional explicit voiced flags; derived from ``f0`` if
-                omitted.
+            voiced: optional explicit voiced flags. When omitted, a frame is
+                voiced iff its phoneme is not voiceless **and** its ``f0`` is
+                nonzero — never from ``f0`` alone, because a score front-end
+                writes pitch as a contour across consonants, and voicing those
+                frames would swallow every /k/ and /s/.
             noise_scale: prior sampling temperature.
 
         Returns:
@@ -124,12 +142,12 @@ class Synthesizer:
         durations_t = durations_t.unsqueeze(0).to(self.device)
         f0_t = f0_t.unsqueeze(0).to(self.device)
         energy_t = energy_t.unsqueeze(0).to(self.device)
+        if voiced is None:
+            voiced = frame_voicing(phonemes, durations, f0)
         voiced_t = (
             torch.as_tensor(np.asarray(voiced), dtype=torch.float32)
             .unsqueeze(0)
             .to(self.device)
-            if voiced is not None
-            else None
         )
         speaker_t = torch.tensor(
             [self.resolve_speaker(speaker)], dtype=torch.long, device=self.device

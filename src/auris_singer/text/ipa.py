@@ -58,6 +58,31 @@ IPA_SYMBOLS: tuple[str, ...] = (
     "j", "w", "ɰ", "ɹ", "ɾ", "ɾʲ", "r", "l", "ʎ",
 )
 
+#: Symbols produced without vocal-fold vibration: voiceless obstruents, the
+#: devoiced vowels, and every non-sound special symbol. This is what decides a
+#: frame's ``voiced`` flag when a caller supplies phonemes but no explicit
+#: voicing — a score front-end writes f0 as a contour across consonants, so
+#: voicing must come from the phoneme class, never from ``f0 > 0``.
+VOICELESS: frozenset[str] = frozenset(
+    SPECIAL_SYMBOLS
+) | frozenset(
+    {
+        "ḁ", "i̥", "ɯ̥", "e̥", "o̥",
+        "p", "pʲ", "t", "tʲ", "k", "kʲ", "kʷ", "ʔ",
+        "ts", "tɕ", "tʃ",
+        "ɸ", "ɸʲ", "f", "θ", "s", "ɕ", "ʃ", "ç", "x", "h",
+    }
+)
+
+
+def is_voiceless(symbol: str) -> bool:
+    """``True`` for a phoneme produced without vocal-fold vibration.
+
+    Unknown symbols answer ``False`` — a wrongly-voiced frame keeps the pitch
+    contour intact, while a wrongly-unvoiced one silences it.
+    """
+    return symbol in VOICELESS
+
 
 class PhonemeTable:
     """Bidirectional map between IPA symbols and integer ids."""

@@ -33,9 +33,12 @@ Rules:
   with the default hop of 480 samples. It must be the same length as
   `phonemes`.
 * `f0` and `energy` must each have exactly `sum(durations)` entries.
-* `f0` is in Hz; `0` marks an unvoiced frame. `voiced` may be supplied
-  explicitly as an optional array of the same length; otherwise it is derived
-  from `f0`.
+* `f0` is in Hz; write it as a *contour* — consonant frames carry the pitch of
+  the vowel they lead into, `0` only where nothing is sung. `voiced` may be
+  supplied explicitly as an optional array of the same length; otherwise a
+  frame is voiced iff its phoneme is not voiceless (`text.VOICELESS`) and its
+  f0 is nonzero. It is never derived from f0 alone — that would voice every
+  /k/ and /s/ under the contour and swallow the consonants.
 * `energy` is linear RMS, on the same scale the preprocessing pipeline
   produced (roughly `0.0`–`0.5` for peak-normalized audio).
 * `speaker` may be a name from the training set or an integer id.
@@ -131,7 +134,9 @@ Two contract points that differ from the Python API:
 * **`voiced` is required, not derived from `f0`.** A DAW front-end that
   writes pitch as a contour puts real f0 values on unvoiced consonant
   frames; deriving voicing from `f0 > 0` would silently voice them. Decide
-  voicing from the phoneme class and say so explicitly.
+  voicing from the phoneme class and say so explicitly — the classification
+  the Python API uses is `auris_singer.text.VOICELESS` /
+  `infer.frame_voicing`, and a port of it belongs in the caller.
 * **`sum(durations)` must equal `T` exactly** — the graph does not trim the
   curves the way `Synthesizer.synthesize` does.
 
