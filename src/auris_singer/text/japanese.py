@@ -61,6 +61,7 @@ OPENJTALK_TO_IPA: dict[str, str] = {
     "s": "s",
     "sh": "ɕ",
     "f": "ɸ",
+    "fy": "ɸʲ",
     "v": "v",
     "h": "h",
     "hy": "ç",
