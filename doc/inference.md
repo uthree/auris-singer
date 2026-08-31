@@ -161,6 +161,130 @@ the `.json` sidecar:
 the model config; `symbols` maps IPA strings to the ids `phonemes` wants
 (index in the list = id).
 
+### Consonant widths
+
+`durations` is an input, so something upstream has to decide how many frames
+each phoneme gets. Syllabic phonemes are easy — they stretch to fill the note.
+The consonants leading into them are not, and a front-end with no better
+information has to guess.
+
+A single flat guess is measurably wrong, and wrong in a way that costs
+intelligibility. Consonant length in sung Japanese spans a factor of three by
+phoneme class, so any one constant is far too short for the sibilants and too
+long for the liquids. Because the numbers are a property of the corpus a voice
+was trained on rather than of the architecture, they travel **with the model**,
+under the optional `phoneme_durations` key of the same metadata JSON:
+
+```json
+{
+  "phoneme_durations": {
+    "unit": "seconds",
+    "default": 0.060,
+    "seconds": {"ts": 0.119, "tɕ": 0.113, "ɕ": 0.110, "s": 0.104, "k": 0.091},
+    "counts": {"ts": 679, "tɕ": 357, "ɕ": 1231, "s": 1907, "k": 4859},
+    "measured_from": "Namine Ritsu singing DB Ver2.0.2, mono labels, 110 songs"
+  }
+}
+```
+
+| field | meaning |
+| --- | --- |
+| `unit` | always `"seconds"`; frames are `round(seconds * sample_rate / hop_length)` — 100 per second at the shipped 48 kHz / hop 480 |
+| `default` | the width to use for any phoneme not named in `seconds` |
+| `seconds` | IPA symbol → width, longest first |
+| `counts` | how many occurrences each median came from, so a consumer can apply a stricter threshold without re-measuring |
+| `measured_from` | free text naming the corpus and label set |
+
+#### The rule for a consumer
+
+```
+width(phoneme) = seconds[phoneme] if present else default
+```
+
+That is the whole contract. Three things follow from it that are worth stating
+outright, because each one is a mistake that looks reasonable:
+
+* **Only apply it to phonemes that take a fixed slot.** The table never names a
+  vowel, the moraic nasal `ɴ`, or the glottal stop `ʔ`, because their length
+  belongs to the note rather than to the phoneme. A consumer that looks them up
+  correctly gets `default` — but it should not be giving them a fixed width at
+  all. The devoiced vowels (`i̥`, `ɯ̥`, …) are the opposite case: they *are*
+  slot-taking and may appear in the table.
+* **Every entry is longer than `default`.** This is deliberate, not an
+  accident of the corpus. Measured widths shorter than the default were tested
+  and made the output worse: `ɾ`'s true median is 36 ms, and giving it that
+  instead of 60 ms cost 20 % on the spectral distance below, because the
+  model's own preference bottoms out near 50 ms and is flat above it. Only
+  lengthening is supported by evidence, so only lengthening is shipped. A
+  consumer therefore never needs to shorten anything.
+* **The block is optional.** A model exported without one has no
+  `phoneme_durations` key, and the consumer falls back to its own default. Do
+  not fail to load a voice over a missing table.
+
+#### Why it matters
+
+Sweeping consonant duration through the exported Ritsu model and comparing the
+output against the real recordings — same phrase, same pitch, 24 renders per
+point, `a C a` context — the distance roughly halves once a sibilant is given
+its own width:
+
+| | at 60 ms | at its table width | improvement |
+| --- | --- | --- | --- |
+| `ɕ` | 0.97 | 0.46 | −53 % |
+| `ts` | 0.86 | 0.41 | −52 % |
+| `s` | 0.85 | 0.42 | −50 % |
+| `tɕ` | 0.78 | 0.41 | −48 % |
+| `k` | 0.88 | 0.68 | −23 % |
+| `t` | 0.67 | 0.52 | −22 % |
+
+The high-frequency content that carries sibilant identity follows: the ratio of
+energy above 4 kHz to below it, for `s`, goes from 6.7 at 60 ms to 40.6 at
+104 ms, against 36.6 measured in the real recordings. At 60 ms the model does
+not form the sibilant at all; at its trained width it matches the singer. The
+curves flatten above roughly 90–150 ms, so this is a floor to clear rather than
+a target to hit precisely.
+
+#### One interaction to be aware of
+
+A front-end that takes the consonant's time from *inside* the note delays the
+vowel by the consonant's width. Going from 60 ms to 110 ms on `ɕ` therefore
+moves that syllable's vowel onset 50 ms later, and only for the syllables that
+start with a sibilant — an uneven lateness that is easier to hear than a
+uniform one. Singers place a consonant ahead of the beat so the vowel lands on
+it. Whether to do the same is the front-end's decision, but it should be made
+deliberately alongside adopting the table, not discovered afterwards.
+
+#### Producing the block
+
+Needs a corpus that ships phoneme alignments — mono labels as in the Namine
+Ritsu database, or HTS full-context labels as in JSUT-song. Training itself
+does not use them; this is the one thing they are read for.
+
+```bash
+uv run python scripts/measure_phoneme_durations.py \
+    --label-dir 'data/raw/namine_ritsu_v2/「波音リツ」歌声データベースVer2.0.2/DATABASE' \
+    --measured-from 'Namine Ritsu singing DB Ver2.0.2, mono labels, 110 songs' \
+    --output data/raw/namine_ritsu_durations.json
+```
+
+```bash
+uv run python scripts/export_onnx.py --checkpoint last.ckpt --output ritsu.onnx \
+    --phoneme-durations data/raw/namine_ritsu_durations.json
+```
+
+Durations are counted in **medial** position — consonants whose predecessor is
+a sound rather than a boundary. The distinction is not cosmetic for plosives:
+the label span of an intervocalic `k` includes its closure and runs 91 ms,
+while phrase-initially there is no closure to include and the same label covers
+24 ms. A sung phrase is nearly all medial. Continuants barely move between the
+two contexts (`ɕ` is 112 ms against 110 ms), so the choice really only decides
+the plosives.
+
+A phoneme needs at least 90 occurrences before its median is shipped; below
+that the default is the better estimate. The exporter refuses a table naming
+symbols outside the checkpoint's phoneme table, which catches a table measured
+against a phoneme set that has since moved on.
+
 ### Voice card
 
 Presentational metadata — what a host application shows to a person browsing
