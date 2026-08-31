@@ -49,6 +49,12 @@ def main() -> None:
         type=Path,
         help="character image embedded into the voice card (png/jpeg/webp, <=8 MB)",
     )
+    parser.add_argument(
+        "--phoneme-durations",
+        type=Path,
+        help="JSON file from scripts/measure_phoneme_durations.py: how long each "
+        "consonant should be given to this voice",
+    )
     args = parser.parse_args()
 
     module = AurisSingerModule.load_from_checkpoint(args.checkpoint, map_location="cpu")
@@ -62,8 +68,21 @@ def main() -> None:
     if args.portrait:
         voice["portrait"] = load_portrait(args.portrait)
 
+    durations = None
+    if args.phoneme_durations:
+        durations = json.loads(args.phoneme_durations.read_text(encoding="utf-8"))
+        if not isinstance(durations, dict) or not isinstance(durations.get("seconds"), dict):
+            raise SystemExit("--phoneme-durations must contain a JSON object with a 'seconds' map")
+
     output = Path(args.output)
-    export_onnx(module.model, output, metadata=metadata, opset=args.opset, voice=voice or None)
+    export_onnx(
+        module.model,
+        output,
+        metadata=metadata,
+        opset=args.opset,
+        voice=voice or None,
+        phoneme_durations=durations,
+    )
     size_mb = output.stat().st_size / 1e6
     print(f"wrote {output} ({size_mb:.1f} MB) and {output.with_suffix('.json').name}")
 

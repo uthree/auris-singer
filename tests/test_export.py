@@ -113,8 +113,15 @@ def test_onnx_export_runs_and_matches_pytorch(model, tmp_path):
     export_onnx(
         model,
         path,
-        metadata={"symbols": ["<pad>", "a"], "speaker_to_id": {"x": 0}},
+        metadata={"symbols": ["<pad>", "a", "s"], "speaker_to_id": {"x": 0}},
         voice={"name": "Test Singer", "description": "a demo voice", "credits": ["someone"]},
+        phoneme_durations={
+            "unit": "seconds",
+            "default": 0.06,
+            "seconds": {"s": 0.104},
+            "counts": {"s": 1907},
+            "measured_from": "unit test",
+        },
     )
 
     # verify_onnx runs onnxruntime at sizes the trace never saw (so a baked-in
@@ -125,14 +132,45 @@ def test_onnx_export_runs_and_matches_pytorch(model, tmp_path):
     # The metadata rides along both inside the file and as a sidecar.
     props = {entry.key: entry.value for entry in onnx.load(str(path)).metadata_props}
     stored = json.loads(props[METADATA_KEY])
-    assert stored["symbols"] == ["<pad>", "a"]
+    assert stored["symbols"] == ["<pad>", "a", "s"]
     assert stored["sample_rate"] == 48_000
     assert stored["hop_length"] == HOP
     assert stored["inter_channels"] == model.inter_channels
     assert stored["voice"]["name"] == "Test Singer"
+    assert stored["phoneme_durations"]["seconds"] == {"s": 0.104}
+    assert stored["phoneme_durations"]["default"] == 0.06
     sidecar = json.loads((tmp_path / "tiny.json").read_text(encoding="utf-8"))
     assert sidecar == stored
 
     # One self-contained file: the exporter's external-data sidecar must be
     # inlined and cleaned up, not left as a stale duplicate.
     assert not (tmp_path / "tiny.onnx.data").exists()
+
+
+def test_phoneme_durations_outside_the_symbol_table_are_refused(model, tmp_path):
+    """A table measured against a different phoneme set is a mistake, not a
+    thing to ship silently -- and it is caught before the expensive trace."""
+    from auris_singer.export import export_onnx
+
+    with pytest.raises(ValueError, match="outside the model's table"):
+        export_onnx(
+            model,
+            tmp_path / "tiny.onnx",
+            metadata={"symbols": ["<pad>", "a"]},
+            phoneme_durations={"seconds": {"s": 0.104, "ts": 0.119}},
+        )
+    assert not (tmp_path / "tiny.onnx").exists(), "refused before tracing anything"
+
+
+def test_phoneme_durations_are_optional(model, tmp_path):
+    """Without a table the metadata simply has no such key, and a consumer
+    falls back to its own default."""
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("onnx")
+    import json
+
+    from auris_singer.export import export_onnx
+
+    export_onnx(model, tmp_path / "tiny.onnx", metadata={"symbols": ["<pad>", "a"]})
+    sidecar = json.loads((tmp_path / "tiny.json").read_text(encoding="utf-8"))
+    assert "phoneme_durations" not in sidecar

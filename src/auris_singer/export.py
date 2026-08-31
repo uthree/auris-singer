@@ -23,6 +23,7 @@ import torch
 import torch.nn as nn
 
 from auris_singer.model import AurisSinger
+from auris_singer.phoneme_durations import METADATA_FIELD as DURATIONS_FIELD
 from auris_singer.utils.masks import sequence_mask
 
 __all__ = ["OnnxSingerWrapper", "export_onnx", "verify_onnx", "load_portrait", "METADATA_KEY"]
@@ -197,6 +198,7 @@ def export_onnx(
     metadata: dict[str, Any] | None = None,
     opset: int = 18,
     voice: dict[str, Any] | None = None,
+    phoneme_durations: dict[str, Any] | None = None,
 ) -> None:
     """Export the inference path to ``path`` as ONNX.
 
@@ -215,8 +217,28 @@ def export_onnx(
     ``description``, ``author``, ``license``, ``credits``, and a ``portrait``
     (see :func:`load_portrait`). It is stored under the ``voice`` key of the
     same JSON, so the one ``.onnx`` file carries everything a UI needs.
+
+    ``phoneme_durations`` is the per-phoneme consonant width table built by
+    :func:`auris_singer.phoneme_durations.summarize`, stored under a key of the
+    same name. It says how long each consonant should be *given* to this voice,
+    which a front-end has to decide before it can turn a note into frames. The
+    numbers are a property of the corpus the model was trained on, so they
+    belong with the model rather than hard-coded in the front-end;
+    ``doc/inference.md`` documents the format for consumers.
     """
     from torch.export import Dim
+
+    if phoneme_durations:
+        # A table keyed by symbols this model cannot be given is dead weight,
+        # and shipping one silently hides a phoneme table that has moved on
+        # since the durations were measured. Fail before the trace, not after.
+        symbols = set((metadata or {}).get("symbols") or ())
+        stray = sorted(set(phoneme_durations.get("seconds") or ()) - symbols)
+        if symbols and stray:
+            raise ValueError(
+                f"phoneme_durations names symbols outside the model's table: {stray}; "
+                "re-measure them against this checkpoint's phoneme table"
+            )
 
     model = model.eval()
     model.remove_weight_norm()
@@ -261,6 +283,8 @@ def export_onnx(
     }
     if voice:
         merged["voice"] = voice
+    if phoneme_durations:
+        merged[DURATIONS_FIELD] = phoneme_durations
 
     import onnx
 
