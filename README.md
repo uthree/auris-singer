@@ -1,5 +1,7 @@
-# auris-singer
+# NOTICE
+This repository has been merged into [auris-studio](https://github.com/uthree/auris-studio). No further updates will be made.
 
+# auris-singer
 A singing voice synthesizer built on VITS, running at 48 kHz.
 
 The model keeps the VITS variational framework (posterior encoder, normalizing
