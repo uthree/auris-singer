@@ -154,7 +154,11 @@ class SelfAttention(nn.Module):
         out = F.scaled_dot_product_attention(
             q, k, v, attn_mask=attn_mask, dropout_p=self.dropout if self.training else 0.0
         )
-        out = out.transpose(1, 2).reshape(b, t, -1)
+        # The head dimension is written out rather than inferred with -1: a -1 in
+        # a traced view becomes an ONNX Reshape with allowzero=1 whose shape
+        # tensor holds -1, and onnxruntime's DirectML provider rejects that
+        # combination outright (see doc/inference.md).
+        out = out.transpose(1, 2).reshape(b, t, self.n_heads * self.head_dim)
         return self.proj(out)
 
 

@@ -161,6 +161,32 @@ the `.json` sidecar:
 the model config; `symbols` maps IPA strings to the ids `phonemes` wants
 (index in the list = id).
 
+### Execution providers
+
+The graph runs on onnxruntime's CPU and DirectML providers at any `B`, `S` and
+`T` — the sequence lengths are dynamic dimensions, not the sizes the trace
+happened to see. On the same inputs the two agree to about 1e-7.
+
+Getting DirectML (which is what an AMD GPU uses on Windows) to accept it took
+two things, because that provider rejects with a bare "the parameter is
+incorrect" two spellings the CPU provider is happy with:
+
+* **`Reshape` with `allowzero=1` and a `-1` in its shape tensor.** That is
+  what a traced `view(b, t, -1)` becomes, and the attention blocks had one.
+  They now write the head dimension out (`n_heads * head_dim`), which is the
+  same reshape with nothing to infer.
+* **`ConvTranspose` carrying an `output_padding` attribute — even `[0]`.**
+  The generator's upsampling stages need a nonzero one whenever
+  `kernel - rate` is odd, so it cannot simply be dropped at the source.
+  `export_onnx` folds it into `pads` instead: the output length is
+  `stride * (in - 1) + output_padding + (kernel - 1) * dilation + 1 -
+  pads_begin - pads_end`, so `output_padding` and a smaller `pads_end` are the
+  same crop of the same transposed convolution, element for element.
+
+Both are properties of the exported graph, so a model file exported by this
+repository needs no provider-specific handling in the consumer. A test guards
+them (`tests/test_export.py`), since CI has no GPU to catch a regression with.
+
 ### Consonant widths
 
 `durations` is an input, so something upstream has to decide how many frames

@@ -192,6 +192,48 @@ def _example_inputs(model: AurisSinger) -> dict[str, torch.Tensor]:
     }
 
 
+def _fold_conv_transpose_output_padding(proto) -> int:
+    """Rewrite ``ConvTranspose`` so it carries no ``output_padding`` attribute.
+
+    onnxruntime's DirectML provider rejects a 1-D ``ConvTranspose`` that has an
+    ``output_padding`` attribute at all — even ``[0]`` — with a bare
+    "the parameter is incorrect". The attribute is redundant: the output length
+    is ``stride * (in - 1) + output_padding + (kernel - 1) * dilation + 1 -
+    pads_begin - pads_end``, so ``output_padding`` enters exactly as a smaller
+    ``pads_end`` does. Subtracting it there produces the same crop of the same
+    transposed convolution, element for element, and the graph then runs on
+    DirectML as well as on the CPU provider.
+
+    The fold needs ``pads_end >= output_padding``, which holds for the
+    generator's upsampling schedule (``padding = (kernel - rate + 1) // 2``
+    always covers ``output_padding = rate + 2 * padding - kernel``). A node
+    that would need a negative pad is left alone rather than silently changed.
+
+    Returns the number of nodes rewritten.
+    """
+    folded = 0
+    for node in proto.graph.node:
+        if node.op_type != "ConvTranspose":
+            continue
+        attrs = {a.name: a for a in node.attribute}
+        out_pad = attrs.get("output_padding")
+        if out_pad is None:
+            continue
+        values = list(out_pad.ints)
+        pads = attrs.get("pads")
+        # `pads` is [begin_0, ..., begin_n, end_0, ..., end_n]; absent means all
+        # zero, in which case a nonzero output_padding cannot be folded.
+        ends = list(pads.ints)[len(values):] if pads is not None else [0] * len(values)
+        if any(op > end for op, end in zip(values, ends)):
+            continue
+        if any(values) and pads is not None:
+            for i, op in enumerate(values):
+                pads.ints[len(values) + i] = ends[i] - op
+        node.attribute.remove(out_pad)
+        folded += 1
+    return folded
+
+
 def export_onnx(
     model: AurisSinger,
     path: str | Path,
@@ -261,7 +303,7 @@ def export_onnx(
     path.parent.mkdir(parents=True, exist_ok=True)
     with torch.no_grad():
         torch.onnx.export(
-            OnnxSingerWrapper(model),
+            OnnxSingerWrapper(model).eval(),
             (),
             str(path),
             kwargs=_example_inputs(model),
@@ -289,6 +331,7 @@ def export_onnx(
     import onnx
 
     proto = onnx.load(str(path))
+    _fold_conv_transpose_output_padding(proto)
     entry = proto.metadata_props.add()
     entry.key = METADATA_KEY
     entry.value = json.dumps(merged, ensure_ascii=False)

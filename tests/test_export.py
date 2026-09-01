@@ -174,3 +174,53 @@ def test_phoneme_durations_are_optional(model, tmp_path):
     export_onnx(model, tmp_path / "tiny.onnx", metadata={"symbols": ["<pad>", "a"]})
     sidecar = json.loads((tmp_path / "tiny.json").read_text(encoding="utf-8"))
     assert "phoneme_durations" not in sidecar
+
+
+def test_the_graph_avoids_the_constructs_directml_rejects(model, tmp_path):
+    """Two ONNX spellings run on CPU and CUDA but fail on onnxruntime's
+    DirectML provider, which is what an AMD GPU uses on Windows:
+
+    * ``Reshape`` with ``allowzero=1`` and a ``-1`` in its shape tensor — what
+      a traced ``view(b, t, -1)`` becomes;
+    * ``ConvTranspose`` carrying an ``output_padding`` attribute at all, even
+      ``[0]``.
+
+    Both fail with a bare "the parameter is incorrect", so guard the shape of
+    the graph here rather than waiting for a bug report from a GPU nobody in
+    CI has.
+    """
+    onnx = pytest.importorskip("onnx")
+
+    from auris_singer.export import export_onnx
+
+    path = tmp_path / "tiny.onnx"
+    export_onnx(model, path, metadata={"symbols": ["<pad>", "a"]})
+    graph = onnx.load(str(path)).graph
+
+    constants = {i.name: onnx.numpy_helper.to_array(i) for i in graph.initializer}
+    for node in graph.node:
+        for attr in node.attribute:
+            if node.op_type == "Constant" and attr.name == "value":
+                constants[node.output[0]] = onnx.numpy_helper.to_array(attr.t)
+
+    def holds_a_negative(name: str) -> bool:
+        """Whether a shape tensor is built from any negative constant."""
+        if name in constants:
+            return bool((constants[name] < 0).any())
+        source = next((n for n in graph.node if name in n.output), None)
+        if source is not None and source.op_type == "Concat":
+            return any(holds_a_negative(i) for i in source.input)
+        return False
+
+    for node in graph.node:
+        attrs = {a.name: a for a in node.attribute}
+        if node.op_type == "Reshape" and attrs.get("allowzero", None) is not None:
+            if attrs["allowzero"].i == 1:
+                assert not holds_a_negative(node.input[1]), (
+                    f"{node.name}: Reshape allowzero=1 with a -1 in its shape is "
+                    "rejected by DirectML; write the dimension out instead of -1"
+                )
+        assert node.op_type != "ConvTranspose" or "output_padding" not in attrs, (
+            f"{node.name}: DirectML rejects any output_padding on a 1-D "
+            "ConvTranspose; export_onnx should have folded it into pads"
+        )
